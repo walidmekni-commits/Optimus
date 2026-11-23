@@ -20,7 +20,7 @@
 ### Calibration / Back-analysis: Reference Results from an Excel file
 
 Next to typing the measured values, the *Measured values* section of a Calibration / Back-analysis study has
-**⬆ Upload Reference Results** (.xlsx recommended, .xls or .csv) and **⬇ Excel template**. The file is checked row
+**⬆ Upload Reference Results** (.xlsx recommended, .xls or .csv) and **⬇ Excel template** / **⬇ CSV template**. The file is checked row
 by row; only a file with no wrong row is loaded.
 
 **Format (one table per file).** The table is on the sheet named `Reference Results` (else the first sheet); its
@@ -60,6 +60,18 @@ a wrong time or unit of time, an X when the X-axis is not a variable, or the sam
 twice on the same day. A file with no rows under the header, more than
 5000 rows, or that is not .xlsx / .xls / .csv is refused with its reason. Old .xls files need the `xlrd` package
 (installed by run.bat from requirements.txt), otherwise save as .xlsx.
+
+**CSV files.** The same columns and the same checks as the Excel table: the header on the first line, values
+separated by commas, or by semicolons when the decimal separator is a comma (`wall_ux;12,5;mm`), or tabs. Save from
+Excel as *CSV UTF-8* (Windows-1252, Excel's plain *CSV (Comma delimited)*, also works). Row numbers in the error
+messages are the line numbers of the file. Example:
+
+```
+Result,Value,Unit,Stage,Time (min)
+Max anchor force,410,kN,,
+uv,1.2,mm,,30
+uv,2.6,mm,,60
+```
 
 **X-axis of the figures.** Under *Results over time* (and always in a calibration) the figures of the results by
 stage can be drawn against: *Time (days)*, *Time (hours)*, *Time / duration (minutes)*, *Construction stage*, or

@@ -113,11 +113,24 @@ def _read_xls(data: bytes) -> list[list]:
 
 
 def _read_csv(data: bytes) -> list[list]:
-    text = data.decode("utf-8-sig", errors="replace")
+    """A CSV saved by Excel: UTF-8 (with or without BOM) or Windows-1252 ("CSV (Comma delimited)" keeps kN/m² as
+    one byte), separated by commas, semicolons (Excel with a decimal comma) or tabs."""
+    if b"\x00" in data[:4096]:
+        raise ReferenceError(["The .csv file is not text (is it an Excel file renamed .csv?). Save it as CSV UTF-8 "
+                              "or upload the .xlsx."])
     try:
-        dialect = csv.Sniffer().sniff(text[:2048], delimiters=",;\t")
+        text = data.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        text = data.decode("cp1252", errors="replace")
+    head = "\n".join(text.splitlines()[:20])
+    first = next((ln for ln in text.splitlines() if ln.strip()), "")
+    counts = {d: first.count(d) for d in (";", "\t", ",")}
+    delim = max(counts, key=counts.get) if any(counts.values()) else ","
+    try:  # the header row decides; the sniffer only confirms quoting
+        dialect = csv.Sniffer().sniff(head, delimiters=delim)
     except csv.Error:
         dialect = csv.excel
+    dialect.delimiter = delim
     return [list(r) for r in csv.reader(io.StringIO(text), dialect)]
 
 
@@ -355,6 +368,16 @@ def parse(data: bytes, filename: str, m: dict, setup: dict | None = None, study:
                                                       key=lambda p: (p["day"], p.get("x") or 0))}
                        for k, pts in series.items()],
             "rows": len(body), "warnings": warnings, "longterm": lt if used_lt else None}
+
+
+def template_csv() -> bytes:
+    """The same example as a CSV (UTF-8 with BOM, so Excel opens kN/m² and |u| correctly)."""
+    buf = io.StringIO()
+    w = csv.writer(buf, lineterminator="\r\n")
+    w.writerow(["Result", "Value", "Unit", "Stage", "Day"])
+    for r in EXAMPLE:
+        w.writerow(["" if x is None else x for x in r])
+    return ("\ufeff" + buf.getvalue()).encode("utf-8")
 
 
 def template() -> bytes:

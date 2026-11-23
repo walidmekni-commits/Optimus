@@ -1653,15 +1653,16 @@ function renderRef() {
   box.classList.toggle('hidden', S.mode !== 'calibration');
   if (S.mode !== 'calibration') { box.innerHTML = ''; return; }
   const ref = S.reference;
-  box.innerHTML = `<b>Reference Results</b> <span class="meta">— type the measured values below, or upload them from an Excel file (.xlsx, .xls or .csv)</span><br>
+  box.innerHTML = `<b>Reference Results</b> <span class="meta">— type the measured values below, or upload them from an Excel or CSV file (.xlsx, .xls, .csv)</span><br>
     <input type="file" id="refFile" accept=".xlsx,.xlsm,.xls,.csv" class="hidden">
     <button class="small primary" id="refUp"${CAT ? '' : ' disabled title="Read the PLAXIS model first"'}>⬆ Upload Reference Results</button>
-    <a class="small" href="/api/reference-results-template.xlsx" download>⬇ Excel template</a>
+    <a class="small" href="/api/reference-results-template.xlsx" download>⬇ Excel template</a> <a class="small" href="/api/reference-results-template.csv" download>⬇ CSV template</a>
     ${ref ? `<button class="small ghost" id="refDel" title="Remove the file and the measured values and readings it gave">🗑 Remove file</button>
       <p class="meta">📄 <b>${esc(ref.name || 'file')}</b> (${esc(ref.at || '')}): ${ref.rows} rows, ${ref.finals} final value${ref.finals === 1 ? '' : 's'} and ${ref.readings} reading${ref.readings === 1 ? '' : 's'} by stage or day. You can still edit the values below.</p>
       ${(ref.warnings || []).map(w => `<p class="meta">⚠ ${esc(w)}</p>`).join('')}` : ''}
     ${REF_ERR ? `<div class="err">${esc(REF_ERR)}</div>` : ''}
     <details${REF_ERR ? ' open' : ''}><summary>File format guideline</summary>
+      <p class="meta"><b>CSV:</b> the same columns, header on the first line, values separated by commas, or by semicolons when the decimal separator is a comma (12,5). Save from Excel as <i>CSV UTF-8</i> (Windows-1252 also works). The same checks apply.</p>
       <p class="meta">One table per file, on the sheet named <b>Reference Results</b> (else the first sheet). The first row is the header; column names are not case sensitive and can be in any order.</p>
       <table><tr><th>Column</th><th></th><th>What to write</th></tr>
         <tr><td>Result</td><td>required</td><td>The PLAXIS result: its key (<code>utot</code>, <code>wall_ux</code>, <code>anchor</code>…), its name in this list, or its PLAXIS name (<code>Utot_max</code>)</td></tr>

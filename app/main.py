@@ -1427,6 +1427,13 @@ def remove_reference(pid: str):
     return {"study": s, **(_study_preview(m, s) if m else {})}
 
 
+@app.get("/api/reference-results-template.csv")
+def reference_template_csv():
+    from . import reference
+    return Response(reference.template_csv(), media_type="text/csv",
+                    headers={"Content-Disposition": 'attachment; filename="Reference Results template.csv"'})
+
+
 @app.get("/api/reference-results-template.xlsx")
 def reference_template():
     from . import reference

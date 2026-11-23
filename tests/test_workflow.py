@@ -832,3 +832,23 @@ def test_reference_results_time_in_minutes_and_x_axis(client):
     # an X-axis variable without values is reported before the run
     prev = client.put(f"/api/projects/{pid}/study", json={**r.json()["study"], "xaxis": {"kind": "variable"}}).json()
     assert any("X-axis" in e for e in prev["errors"])
+
+
+def test_reference_results_csv(client):
+    """CSV: commas, semicolons with a decimal comma, Windows-1252, the same checks as Excel, and its template."""
+    pid = _cal_project(client)
+    r = _upload_ref(client, pid, b"Result,Value,Unit,Stage,Time (min)\r\nMax anchor force,410,kN,,\r\nuv,1.2,mm,,30\r\n", "ref.csv")
+    assert r.status_code == 200, r.text
+    s = r.json()["study"]
+    assert s["measured"] == [{"output": "anchor", "value": pytest.approx(410.0)}]
+    assert s["series"][0]["points"] == [{"day": pytest.approx(30 / 1440), "value": pytest.approx(0.0012)}]
+    r = _upload_ref(client, pid, "Result;Value;Unit\nMax excess pore pressure;12,5;kN/m²\n".encode("cp1252"), "ref.csv")
+    assert r.status_code == 200, r.text
+    assert r.json()["study"]["measured"] == [{"output": "pexcess", "value": pytest.approx(12.5)}]
+    r = _upload_ref(client, pid, b"Result,Reading\nutot,3\n", "ref.csv")  # missing column
+    assert r.status_code == 400 and "Missing columns: Value, Unit" in r.json()["detail"]
+    r = _upload_ref(client, pid, b"Result,Value,Unit\nutot,3,kN\n", "ref.csv")  # wrong unit, line 2
+    assert r.status_code == 400 and 'Row 2: Unit "kN" does not fit' in r.json()["detail"]
+    t = client.get("/api/reference-results-template.csv")
+    assert t.status_code == 200 and t.content.startswith(b"\xef\xbb\xbfResult,Value,Unit")
+    assert _upload_ref(client, pid, t.content, "template.csv").status_code == 200
