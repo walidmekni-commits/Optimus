@@ -1,0 +1,428 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>3D model – PLAXIS AI Design Automation</title>
+<style>
+  :root { --bg:#f2f5f9; --card:#fff; --ink:#15233a; --muted:#5f6b7d; --line:#dde3ec; --accent:#0f6fa8; --warn:#9a6700; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#0f141c; --card:#18202b; --ink:#e7ebf1; --muted:#9ba7b8; --line:#2a3443; --accent:#4fb0e6; --warn:#e3b341; } }
+  * { box-sizing:border-box; }
+  body { margin:0; font:13px/1.45 system-ui, -apple-system, Segoe UI, sans-serif; background:var(--bg); color:var(--ink); height:100vh; display:flex; flex-direction:column; }
+  header { display:flex; gap:10px; align-items:center; padding:8px 14px; background:var(--card); border-bottom:1px solid var(--line); flex-wrap:wrap; }
+  header h1 { font-size:15px; margin:0; } .sp { flex:1; }
+  body.embed header h1, body.embed #proj { display:none; }
+  main { flex:1; display:grid; grid-template-columns:minmax(0,1fr) 330px; min-height:0; }
+  @media (max-width:800px) { main { grid-template-columns:1fr; grid-template-rows:60vh auto; } }
+  #view { position:relative; min-height:300px; background:#cfe3f3; overflow:hidden; }
+  #view canvas { display:block; width:100%; height:100%; }
+  .hud { position:absolute; left:12px; bottom:10px; color:#1c2230; font-size:12.5px; background:rgba(255,255,255,.88); padding:6px 10px; border-radius:8px; box-shadow:0 1px 4px rgba(0,0,0,.15); max-width:70%; }
+  #where { position:absolute; right:12px; top:10px; font-size:12.5px; background:rgba(255,255,255,.9); color:#1c2230; padding:6px 10px; border-radius:8px; box-shadow:0 1px 4px rgba(0,0,0,.15); }
+  #start { position:absolute; inset:0; display:none; align-items:center; justify-content:center; background:rgba(15,23,42,.45); color:#fff; font-size:15px; text-align:center; cursor:pointer; }
+  #start b { font-size:19px; display:block; margin-bottom:6px; }
+  #cross { position:absolute; left:50%; top:50%; width:14px; height:14px; margin:-7px 0 0 -7px; display:none; pointer-events:none; }
+  #cross::before, #cross::after { content:""; position:absolute; background:#fff; box-shadow:0 0 2px #000; }
+  #cross::before { left:6px; top:0; width:2px; height:14px; } #cross::after { top:6px; left:0; height:2px; width:14px; }
+  aside { background:var(--card); border-left:1px solid var(--line); overflow:auto; padding:10px 14px; }
+  aside h2 { font-size:12px; margin:14px 0 6px; text-transform:uppercase; letter-spacing:.05em; color:var(--muted); }
+  table { border-collapse:collapse; width:100%; } td, th { padding:3px 4px; border-bottom:1px solid var(--line); text-align:left; }
+  th { color:var(--muted); font-weight:600; font-size:12px; }
+  input, select, button { font:inherit; color:var(--ink); background:var(--bg); border:1px solid var(--line); border-radius:6px; padding:3px 7px; }
+  button { cursor:pointer; background:var(--card); } td input { width:76px; }
+  label { display:flex; gap:6px; align-items:center; margin:4px 0; }
+  .seg { display:inline-flex; border:1px solid var(--line); border-radius:8px; overflow:hidden; }
+  .seg button { border:0; border-radius:0; padding:6px 12px; font-weight:600; }
+  .seg button.on { background:var(--accent); color:#fff; }
+  .src { font-size:11.5px; color:var(--muted); } .src.inf { color:var(--warn); }
+  .note { color:var(--muted); font-size:12.5px; } .warn { color:var(--warn); font-size:12.5px; }
+  .key { display:inline-block; width:14px; height:10px; border-radius:2px; vertical-align:middle; }
+  input[type=range] { width:100%; padding:0; }
+  #stageTxt { font-size:12.5px; min-height:34px; }
+</style>
+</head>
+<body>
+<script>if (new URLSearchParams(location.search).get("embed")) document.body.classList.add("embed");</script>
+<header>
+  <h1>3D model of the excavation</h1><span id="proj" class="note"></span><span class="sp"></span>
+  <span class="seg"><button id="mOrbit" class="on" title="Look at the whole model">Overview</button><button id="mWalk" title="Walk inside the excavation (keyboard and mouse)">Walk through</button></span>
+  <button id="reset">Reset view</button><button id="full" title="Full screen">⛶</button><button id="reload">Reload</button>
+</header>
+<main>
+  <div id="view">
+    <div id="where"></div>
+    <div id="start"><div><b>Walk through the excavation</b>Click to start · W A S D or arrows to walk · mouse to look<br>Shift to run · Q / E to rise or go down · Space jumps to the pit base · Esc to stop</div></div>
+    <div id="cross"></div>
+    <div class="hud" id="hud">Drag to rotate · right-drag to pan · wheel to zoom</div>
+  </div>
+  <aside>
+    <h2>Construction stage</h2>
+    <input type="range" id="stage" min="0" max="1" value="1" step="1">
+    <div id="stageTxt" class="note"></div>
+    <button id="play" title="Play the construction sequence">▶ Play the sequence</button>
+    <h2>Transition between sections</h2>
+    <label><input type="radio" name="mode" value="linear" checked> Linear: levels change gradually from one section to the next</label>
+    <label><input type="radio" name="mode" value="step"> Step: each section holds half way to its neighbours</label>
+    <h2>Show</h2>
+    <label>Soil <input type="range" id="soilOp" min="0" max="100" value="100" style="width:120px"> <span class="note" id="soilOpT">solid</span></label>
+    <label><input type="checkbox" id="shGhost"> Excavated soil as a ghost</label>
+    <label><input type="checkbox" id="shWall" checked> <span class="key" style="background:#9aa0a6"></span> Wall</label>
+    <label><input type="checkbox" id="shAnch" checked> <span class="key" style="background:#3f4650"></span> Anchors and struts</label>
+    <label><input type="checkbox" id="shWater" checked> <span class="key" style="background:#3d8bd6"></span> Groundwater</label>
+    <label><input type="checkbox" id="shPlanes" checked> Section outlines and names</label>
+    <label><input type="checkbox" id="shPeople" checked> People for scale</label>
+    <label>Vertical exaggeration <select id="vex"><option>1</option><option>1.5</option><option>2</option><option>3</option></select></label>
+    <h2>Chainage of each section (m)</h2>
+    <table id="tbl"></table>
+    <p id="why" class="note"></p>
+    <p class="note">The model is built from each section's consultant model (Geometry › section window › Consultant model). Change it there and press Reload.</p>
+  </aside>
+</main>
+<script src="/static/vendor/three.min.js"></script>
+<script src="/static/vendor/OrbitControls.js"></script>
+<script src="/static/vendor/PointerLockControls.js"></script>
+<script>
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const pid = new URLSearchParams(location.search).get('p');
+const CH = ('BroadcastChannel' in window) ? new BroadcastChannel('plaxis-xs') : null;
+let sections = [], placed = [], model = null;
+
+/* ---------- chainage: read from the drawing, typed by the user, or inferred ---------- */
+function place(list) {
+  const known = list.map((s, i) => [i, s.chainage_from ? +s.y : null]).filter(([, y]) => y !== null);
+  const gaps = [];
+  for (let k = 1; k < known.length; k++) {
+    const [i0, y0] = known[k - 1], [i1, y1] = known[k];
+    gaps.push(Math.abs(y1 - y0) / Math.max(1, i1 - i0));
+  }
+  gaps.sort((a, b) => a - b);
+  const width = Math.max(...list.map(s => s.width || 10));
+  const spacing = gaps.length ? gaps[Math.floor(gaps.length / 2)] : Math.max(10, Math.round(width * 0.5 / 5) * 5);
+  const out = list.map(s => ({s, y: s.chainage_from ? +s.y : null, how: s.chainage_from === 'drawing' ? 'from the drawing' : s.chainage_from === 'user' ? 'typed' : null}));
+  for (let i = 0; i < out.length; i++) {
+    if (out[i].y !== null) continue;
+    let a = i - 1; while (a >= 0 && out[a].y === null) a--;
+    let b = i + 1; while (b < out.length && out[b].y === null) b++;
+    if (a >= 0 && b < out.length) out[i].y = out[a].y + (out[b].y - out[a].y) * (i - a) / (b - a);
+    else if (a >= 0) out[i].y = out[a].y + spacing * (i - a);
+    else if (b < out.length) out[i].y = out[b].y - spacing * (b - i);
+    else out[i].y = spacing * i;
+    out[i].y = Math.round(out[i].y * 100) / 100;
+    out[i].how = 'inferred';
+  }
+  const inferred = out.filter(o => o.how === 'inferred').length;
+  $('#why').innerHTML = inferred ? `<span class="warn">${inferred} section(s) have no chainage on the drawing.</span> They keep their upload order and are placed ${
+    known.length >= 2 ? 'evenly between the sections around them, or at the usual spacing of the known ones (' + spacing + ' m) beyond them'
+    : known.length === 1 ? spacing + ' m apart from the one that has a chainage' : spacing + ' m apart (half the section width)'}. Type a chainage to fix one.` : 'All chainages come from the drawings or were typed.';
+  return out.sort((p, q) => p.y - q.y);
+}
+
+/* ---------- scene ---------- */
+const view = $('#view');
+const renderer = new THREE.WebGLRenderer({antialias: true});
+renderer.setPixelRatio(Math.min(2, window.devicePixelRatio));
+renderer.shadowMap.enabled = true; renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+view.insertBefore(renderer.domElement, view.firstChild);
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0xcfe3f3);
+scene.fog = new THREE.Fog(0xcfe3f3, 400, 1600);
+const camera = new THREE.PerspectiveCamera(55, 1, 0.05, 5000);
+const orbit = new THREE.OrbitControls(camera, renderer.domElement);
+orbit.enableDamping = true;
+const walk = new THREE.PointerLockControls(camera, renderer.domElement);
+scene.add(new THREE.HemisphereLight(0xf2f6ff, 0x8a7a5c, 0.6));
+const sun = new THREE.DirectionalLight(0xffffff, 0.65);
+sun.castShadow = true; sun.shadow.mapSize.set(2048, 2048); sun.shadow.bias = -0.0008; sun.shadow.normalBias = 0.05;
+scene.add(sun); scene.add(sun.target);
+let group = new THREE.Group(); scene.add(group);
+
+const MAT = {};
+function mat(key, make) { return MAT[key] || (MAT[key] = make()); }
+const soilMat = c => mat('soil' + c, () => new THREE.MeshStandardMaterial({color: c, roughness: 0.95, metalness: 0, transparent: true, side: THREE.DoubleSide}));
+const ghostMat = c => mat('ghost' + c, () => new THREE.MeshStandardMaterial({color: c, transparent: true, opacity: 0.16, depthWrite: false, side: THREE.DoubleSide}));
+const concrete = () => mat('concrete', () => new THREE.MeshStandardMaterial({color: 0xa3a8ad, roughness: 0.85}));
+const steel = () => mat('steel', () => new THREE.MeshStandardMaterial({color: 0x3f4650, roughness: 0.4, metalness: 0.6}));
+const grout = () => mat('grout', () => new THREE.MeshStandardMaterial({color: 0x6b7280, roughness: 0.9}));
+const waterMat = () => mat('water', () => new THREE.MeshStandardMaterial({color: 0x3d8bd6, transparent: true, opacity: 0.35, depthWrite: false, side: THREE.DoubleSide}));
+const loadMat = () => mat('load', () => new THREE.MeshStandardMaterial({color: 0xfb923c, transparent: true, opacity: 0.28, depthWrite: false}));
+const groundMat = () => mat('ground', () => new THREE.MeshStandardMaterial({color: 0x8fa37a, roughness: 1}));
+
+let vex = 1;
+const V = z => -z * vex;                       // depth (m, down) -> three.js height
+function prism(pts, y0, y1, material) {        // polygon in (x, z) extruded along the chainage
+  const sh = new THREE.Shape(pts.map(([x, z]) => new THREE.Vector2(x, V(z))));
+  const g = new THREE.ExtrudeGeometry(sh, {depth: y1 - y0, bevelEnabled: false});
+  const m = new THREE.Mesh(g, material); m.position.z = y0; m.castShadow = m.receiveShadow = true; return m;
+}
+function rod(a, b, r, material) {               // cylinder between two 3D points
+  const A = new THREE.Vector3(...a), B = new THREE.Vector3(...b), L = A.distanceTo(B);
+  const m = new THREE.Mesh(new THREE.CylinderGeometry(r, r, L, 10), material);
+  m.position.copy(A).add(B).multiplyScalar(0.5);
+  m.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), B.clone().sub(A).normalize());
+  m.castShadow = true; return m;
+}
+function box(x0, x1, y0, y1, z0, z1, material) {
+  const m = new THREE.Mesh(new THREE.BoxGeometry(Math.abs(x1 - x0), Math.abs(y1 - y0), Math.abs(z1 - z0)), material);
+  m.position.set((x0 + x1) / 2, (y0 + y1) / 2, (z0 + z1) / 2); m.castShadow = m.receiveShadow = true; return m;
+}
+function label(text, x, y, z, size = 1) {
+  const c = document.createElement('canvas'), ctx = c.getContext('2d'); ctx.font = 'bold 44px Segoe UI, Arial';
+  c.width = Math.ceil(ctx.measureText(text).width) + 40; c.height = 70;
+  ctx.font = 'bold 44px Segoe UI, Arial'; ctx.fillStyle = 'rgba(255,255,255,.92)'; ctx.fillRect(0, 0, c.width, c.height);
+  ctx.strokeStyle = '#1c2230'; ctx.lineWidth = 3; ctx.strokeRect(1.5, 1.5, c.width - 3, c.height - 3);
+  ctx.fillStyle = '#1c2230'; ctx.fillText(text, 20, 50);
+  const s = new THREE.Sprite(new THREE.SpriteMaterial({map: new THREE.CanvasTexture(c), depthTest: false}));
+  s.scale.set(c.width / c.height * 1.6 * size, 1.6 * size, 1); s.position.set(x, y, z); s.renderOrder = 10; return s;
+}
+function person(x, y, z) {
+  const g = new THREE.Group(), skin = mat('skin', () => new THREE.MeshStandardMaterial({color: 0xf0c8a0})),
+        vest = mat('vest', () => new THREE.MeshStandardMaterial({color: 0xff7a00})), hat = mat('hat', () => new THREE.MeshStandardMaterial({color: 0xffd400}));
+  const legs = new THREE.Mesh(new THREE.CylinderGeometry(0.17, 0.15, 0.9, 10), mat('jeans', () => new THREE.MeshStandardMaterial({color: 0x2f4a7a})));
+  legs.position.y = 0.45; g.add(legs);
+  const body = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.2, 0.65, 12), vest); body.position.y = 1.22; g.add(body);
+  const head = new THREE.Mesh(new THREE.SphereGeometry(0.13, 16, 12), skin); head.position.y = 1.67; g.add(head);
+  const helmet = new THREE.Mesh(new THREE.SphereGeometry(0.15, 16, 8, 0, Math.PI * 2, 0, Math.PI / 2), hat); helmet.position.y = 1.72; g.add(helmet);
+  g.children.forEach(m => m.castShadow = true);
+  g.position.set(x, y, z); return g;
+}
+
+/* ---------- building the model from the server's slices ---------- */
+let stageMax = 1;
+function stagesOf(geo) { return [0, ...geo.levels, geo.excavation]; }
+function build(fit) {
+  scene.remove(group); group = new THREE.Group(); scene.add(group);
+  if (!model || !model.slices.length) return;
+  vex = parseFloat($('#vex').value) || 1;
+  const k = +$('#stage').value, op = +$('#soilOp').value / 100;
+  const show = id => $(id).checked;
+  Object.keys(MAT).filter(m => m.startsWith('soil')).forEach(m => { MAT[m].opacity = Math.max(op, 0.05); MAT[m].depthWrite = op > 0.95; MAT[m].needsUpdate = true; });
+  let xmin = 1e9, xmax = -1e9, ymin = 1e9, ymax = -1e9, zmax = 0;
+  for (const sl of model.slices) {
+    const g = sl.geo, st = stagesOf(g), depthNow = st[Math.min(k, st.length - 1)];
+    xmin = Math.min(xmin, 0); xmax = Math.max(xmax, g.width); ymin = Math.min(ymin, sl.y0); ymax = Math.max(ymax, sl.y1); zmax = Math.max(zmax, g.depth);
+    for (const p of g.soil) {
+      const top = Math.min(...p.pts.map(q => q[1]));
+      const dug = p.part === 'excavated' && top < depthNow - 1e-6;
+      if (dug) { if (show('#shGhost')) group.add(prism(p.pts, sl.y0, sl.y1, ghostMat(p.colour))); continue; }
+      if (op > 0.02) group.add(prism(p.pts, sl.y0, sl.y1, soilMat(p.colour)));
+    }
+    if (show('#shWall') && g.plates) g.plates.forEach(([a, b]) => {
+      const dx = b[0] - a[0], dz = b[1] - a[1], L = Math.hypot(dx, dz) || 1, nx = -dz / L * 0.2, nz = dx / L * 0.2;
+      group.add(prism([[a[0] - nx, a[1] - nz], [b[0] - nx, b[1] - nz], [b[0] + nx, b[1] + nz], [a[0] + nx, a[1] + nz]], sl.y0, sl.y1, concrete()));
+    });
+    if (show('#shWall') && g.wall) {
+      group.add(prism(g.wall.pts, sl.y0, sl.y1, concrete()));
+      const face = g.side === 'left' ? g.wall.pts[0][0] - 0.01 : g.wall.pts[1][0] + 0.01, toe = g.wall.pts[2][1];
+      const joint = mat('joint', () => new THREE.MeshStandardMaterial({color: 0x5f656b, roughness: 1}));
+      for (let y = Math.ceil(sl.y0 / 6) * 6; y < sl.y1; y += 6) group.add(box(face - 0.02, face + 0.02, V(toe), 0.3, y - 0.04, y + 0.04, joint));
+      const cap = mat('cap', () => new THREE.MeshStandardMaterial({color: 0xb9bdc1, roughness: 0.8}));
+      group.add(box(g.wall.pts[0][0] - 0.15, g.wall.pts[1][0] + 0.15, 0, 0.6, sl.y0, sl.y1, cap));
+    }
+    if (show('#shAnch')) {
+      const left = g.side === 'left';
+      g.anchors.forEach((a, i) => {
+        if (a.z + 0.5 > depthNow + 1e-6 && k < st.length - 1) return;   // not installed yet in this stage
+        const sp = Math.max(1, a.spacing || 2.5);
+        for (let y = Math.ceil(sl.y0 / sp) * sp; y < sl.y1; y += sp) {
+          const H = [a.head[0], V(a.head[1]), y], F = [a.free_end[0], V(a.free_end[1]), y], E = [a.end[0], V(a.end[1]), y];
+          group.add(rod(H, F, 0.045, steel())); group.add(rod(F, E, 0.16, grout()));
+          const face = a.head[0] + (left ? 0.15 : -0.15);
+          group.add(box(face - 0.12, face + 0.12, V(a.head[1]) - 0.25, V(a.head[1]) + 0.25, y - 0.25, y + 0.25, steel()));
+        }
+        // waler beam along the wall at the anchor level, on the pit side
+        const wx = left ? g.wall.pts[0][0] : g.wall.pts[1][0];
+        group.add(box(wx + (left ? -0.35 : 0), wx + (left ? 0 : 0.35), V(a.head[1]) - 0.2, V(a.head[1]) + 0.2, sl.y0, sl.y1, steel()));
+      });
+      g.struts.forEach(s => {
+        if (s.z + 0.5 > depthNow + 1e-6 && k < st.length - 1) return;
+        for (let y = Math.ceil(sl.y0 / 6) * 6; y < sl.y1; y += 6) group.add(rod([s.from[0], V(s.z), y], [s.to[0], V(s.z), y], 0.3, steel()));
+      });
+    }
+    if (show('#shWater')) {
+      for (const [[x0, z], [x1, z1]] of (g.water.lines || [])) {
+        const m = new THREE.Mesh(new THREE.PlaneGeometry(Math.max(0.1, Math.abs(x1 - x0)), sl.y1 - sl.y0), waterMat());
+        m.rotation.x = -Math.PI / 2; m.position.set((x0 + x1) / 2, V((z + z1) / 2), (sl.y0 + sl.y1) / 2); group.add(m);
+      }
+      if (!g.water.lines) for (const key of ['outside', 'inside']) {
+        const [[x0, z], [x1]] = g.water[key];
+        if (key === 'inside' && z < depthNow) continue;  // pit kept dry above its water level
+        const m = new THREE.Mesh(new THREE.PlaneGeometry(Math.abs(x1 - x0), sl.y1 - sl.y0), waterMat());
+        m.rotation.x = -Math.PI / 2; m.position.set((x0 + x1) / 2, V(z), (sl.y0 + sl.y1) / 2); group.add(m);
+      }
+    }
+    if (g.load) group.add(box(g.load.x0, g.load.x1, 0.02, 0.12, sl.y0, sl.y1, loadMat()));
+  }
+  // ground around the model
+  const pad = Math.max(30, (xmax - xmin)), gm = groundMat();
+  [[xmin - pad, xmin, ymin - pad, ymax + pad], [xmax, xmax + pad, ymin - pad, ymax + pad], [xmin, xmax, ymin - pad, ymin], [xmin, xmax, ymax, ymax + pad]].forEach(([a, b, c, d]) => {
+    const m = new THREE.Mesh(new THREE.PlaneGeometry(b - a, d - c), gm); m.rotation.x = -Math.PI / 2; m.position.set((a + b) / 2, -0.02, (c + d) / 2); m.receiveShadow = true; group.add(m);
+  });
+  if (show('#shPlanes')) {
+    const lineM = mat('outline', () => new THREE.LineBasicMaterial({color: 0x1c2230}));
+    model.sections.forEach(sec => {
+      const g = sec.geo;
+      [...g.soil.filter(p => p.part !== 'excavated'), g.wall].filter(Boolean).forEach(p => {
+        const pts = [...p.pts, p.pts[0]].map(([x, z]) => new THREE.Vector3(x, V(z), sec.y + 0.02));
+        group.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), lineM));
+      });
+      group.add(label(`${sec.name} · ch ${sec.y.toFixed(1)} m`, g.width / 2, 4 + g.width * 0.04, sec.y, Math.max(1, g.width / 40)));
+    });
+  }
+  if (show('#shPeople') && !model.slices[0].geo.wall) {
+    const s0 = model.slices[0].geo, y = model.sections[0].y;
+    [0.3, 0.5, 0.7].forEach((f, i) => group.add(person(s0.width * f, V(surfaceZ(s0, s0.width * f)), y + 3 * i)));
+  } else if (show('#shPeople')) {
+    const s0 = model.slices[0].geo, st = stagesOf(s0), dn = st[Math.min(k, st.length - 1)];
+    const pitX = s0.side === 'left' ? s0.wall.pts[0][0] - 2.5 : s0.wall.pts[1][0] + 2.5;
+    const y = model.sections[0].y;
+    group.add(person(pitX, V(dn), y + 9)); group.add(person(pitX - (s0.side === 'left' ? 1.2 : -1.2), V(dn), y + 10.5));
+    const behind = s0.side === 'left' ? s0.wall.pts[1][0] + 3 : s0.wall.pts[0][0] - 3;
+    group.add(person(behind, 0, y + 12));
+  }
+  const cx = (xmin + xmax) / 2, cz = (ymin + ymax) / 2, R = Math.max(xmax - xmin, ymax - ymin, zmax * vex);
+  sun.position.set(cx - R * 0.6, R * 1.2, cz - R * 0.4); sun.target.position.set(cx, -zmax * vex / 2, cz);
+  const sc = sun.shadow.camera; sc.left = sc.bottom = -R; sc.right = sc.top = R; sc.near = 1; sc.far = R * 4; sc.updateProjectionMatrix();
+  bounds = {xmin, xmax, ymin, ymax, zmax};
+  stageText();
+  if (fit) fitView();
+}
+let bounds = null;
+function stageText() {
+  const g = model.sections[0].geo, st = stagesOf(g), k = Math.min(+$('#stage').value, st.length - 1);
+  const label = k === 0 ? 'Wall installed, nothing excavated yet.' : k === st.length - 1 ? `Final excavation to ${g.excavation.toFixed(2)} m, all supports in place.` : `Excavated to ${st[k].toFixed(2)} m; supports above this level installed.`;
+  $('#stageTxt').innerHTML = `<b>Stage ${k} of ${st.length - 1}</b> (${esc(model.sections[0].name)}): ${label}`;
+}
+function fitView() {
+  if (!bounds) return;
+  const {xmin, xmax, ymin, ymax, zmax} = bounds, cx = (xmin + xmax) / 2, cz = (ymin + ymax) / 2, R = Math.max(xmax - xmin, ymax - ymin, zmax);
+  if (mode === 'walk') return startWalkPosition();
+  const g0 = model.sections[0].geo, wallX = g0.wall ? (g0.wall.pts[0][0] + g0.wall.pts[1][0]) / 2 : g0.width / 2;
+  const pitX = g0.side === 'left' ? wallX / 2 : (wallX + g0.width) / 2;
+  const L = Math.min(ymax - ymin, 120);
+  orbit.target.set(wallX, -g0.excavation * vex * 0.6, ymin + L * 0.45);
+  camera.position.set(pitX - (g0.side === 'left' ? 1 : -1) * R * 0.08, Math.max(18, g0.excavation * vex * 2.2), ymin - L * 0.25);
+  orbit.update();
+}
+
+/* ---------- walking ---------- */
+let mode = 'orbit';
+const keys = {};
+addEventListener('keydown', e => { keys[e.code] = true; if (mode === 'walk' && e.code === 'Space') { e.preventDefault(); toPit(); } });
+addEventListener('keyup', e => { keys[e.code] = false; });
+function sliceAt(z) { return model.slices.find(s => z >= s.y0 && z < s.y1) || (z < model.slices[0].y0 ? model.slices[0] : model.slices[model.slices.length - 1]); }
+function surfaceZ(g, x) {           // ground surface at x: top of the highest soil cluster there
+  let top = null;
+  for (const p of g.soil) {
+    if (p.part === 'excavated') continue;
+    const n = p.pts.length;
+    for (let i = 0; i < n; i++) {
+      const [x1, z1] = p.pts[i], [x2, z2] = p.pts[(i + 1) % n];
+      if ((x - x1) * (x - x2) <= 0 && x1 !== x2) { const zz = z1 + (z2 - z1) * (x - x1) / (x2 - x1); top = top === null ? zz : Math.min(top, zz); }
+    }
+  }
+  return top === null ? 0 : top;
+}
+function floorAt(x, z) {
+  if (!sliceAt(z).geo.wall) return V(surfaceZ(sliceAt(z).geo, x));
+  const sl = sliceAt(z), g = sl.geo, st = stagesOf(g), dn = st[Math.min(+$('#stage').value, st.length - 1)];
+  const inPit = g.side === 'left' ? x < g.wall.pts[0][0] : x > g.wall.pts[1][0];
+  const onWall = x >= g.wall.pts[0][0] && x <= g.wall.pts[1][0];
+  if (x < 0 || x > g.width || z < model.slices[0].y0 || z > model.slices[model.slices.length - 1].y1) return 0;
+  return onWall ? 0 : inPit ? V(dn) : 0;
+}
+let eyeOffset = 1.7;
+function toPit() {
+  const s0 = model.slices[0].geo; if (!s0.wall) return; const x = s0.side === 'left' ? s0.wall.pts[0][0] - 4 : s0.wall.pts[1][0] + 4;
+  camera.position.set(x, floorAt(x, camera.position.z) + 1.7, camera.position.z); eyeOffset = 1.7;
+}
+function startWalkPosition() {
+  const s0 = model.sections[0], g = s0.geo;
+  if (!g.wall) { camera.position.set(g.width * 0.15, floorAt(g.width * 0.15, s0.y) + 1.7, s0.y - 5); camera.lookAt(g.width / 2, camera.position.y, s0.y + 10); eyeOffset = 1.7; return; }
+  const x = g.side === 'left' ? g.wall.pts[0][0] - 6 : g.wall.pts[1][0] + 6;
+  camera.position.set(x, floorAt(x, s0.y) + 1.7, s0.y);
+  camera.lookAt(g.side === 'left' ? g.wall.pts[0][0] : g.wall.pts[1][0], camera.position.y - 0.3, s0.y + 6);
+  eyeOffset = 1.7;
+}
+function setMode(m) {
+  mode = m;
+  $('#mOrbit').classList.toggle('on', m === 'orbit'); $('#mWalk').classList.toggle('on', m === 'walk');
+  orbit.enabled = m === 'orbit';
+  $('#start').style.display = m === 'walk' && !walk.isLocked ? 'flex' : 'none';
+  $('#hud').textContent = m === 'walk' ? 'Walk: W A S D · mouse to look · Shift run · Q/E up/down · Space to the pit base · Esc to stop' : 'Drag to rotate · right-drag to pan · wheel to zoom';
+  if (m === 'walk') startWalkPosition(); else { if (walk.isLocked) walk.unlock(); fitView(); }
+}
+$('#mOrbit').onclick = () => setMode('orbit');
+$('#mWalk').onclick = () => setMode('walk');
+$('#start').onclick = () => walk.lock();
+walk.addEventListener('lock', () => { $('#start').style.display = 'none'; $('#cross').style.display = 'block'; });
+walk.addEventListener('unlock', () => { $('#cross').style.display = 'none'; if (mode === 'walk') $('#start').style.display = 'flex'; });
+let last = performance.now();
+function stepWalk(dt) {
+  if (mode !== 'walk' || !model) return;
+  const speed = (keys.ShiftLeft || keys.ShiftRight ? 9 : 3.2) * dt;
+  const f = (keys.KeyW || keys.ArrowUp ? 1 : 0) - (keys.KeyS || keys.ArrowDown ? 1 : 0);
+  const r = (keys.KeyD || keys.ArrowRight ? 1 : 0) - (keys.KeyA || keys.ArrowLeft ? 1 : 0);
+  const before = camera.position.clone();
+  if (f) walk.moveForward(f * speed);
+  if (r) walk.moveRight(r * speed);
+  if (keys.KeyE) eyeOffset += 4 * dt; if (keys.KeyQ) eyeOffset = Math.max(0.4, eyeOffset - 4 * dt);
+  // the wall is solid: you can't walk through it
+  const g = sliceAt(camera.position.z).geo, xa = g.wall ? g.wall.pts[0][0] - 0.3 : 1e9, xb = g.wall ? g.wall.pts[1][0] + 0.3 : -1e9;
+  if (camera.position.x > xa && camera.position.x < xb && eyeOffset < 3) camera.position.x = before.x;
+  const target = floorAt(camera.position.x, camera.position.z) + eyeOffset;
+  camera.position.y += (target - camera.position.y) * Math.min(1, dt * 8);
+  $('#where').textContent = `x ${camera.position.x.toFixed(1)} m · chainage ${camera.position.z.toFixed(1)} m · level ${(-(camera.position.y - eyeOffset) / vex).toFixed(2)} m below ground`;
+}
+function resize() { const w = view.clientWidth, h = view.clientHeight; renderer.setSize(w, h, false); camera.aspect = w / Math.max(h, 1); camera.updateProjectionMatrix(); }
+new ResizeObserver(resize).observe(view); resize();
+(function loop(t) {
+  requestAnimationFrame(loop);
+  const dt = Math.min(0.1, ((t || 0) - last) / 1000); last = t || 0;
+  if (mode === 'orbit') { orbit.update(); $('#where').textContent = model ? `${model.sections.length} section(s) · ${(bounds ? bounds.ymax - bounds.ymin : 0).toFixed(0)} m along the job` : ''; }
+  else stepWalk(dt);
+  renderer.render(scene, camera);
+})();
+
+/* ---------- data ---------- */
+function table() {
+  $('#tbl').innerHTML = '<tr><th>Section</th><th>Chainage</th><th></th></tr>' + placed.map(o =>
+    `<tr><td>${esc(o.s.name)}</td><td><input type="number" step="any" data-id="${o.s.id}" value="${o.y}"></td><td class="src ${o.how === 'inferred' ? 'inf' : ''}">${o.how}</td></tr>`).join('');
+  document.querySelectorAll('#tbl input').forEach(inp => inp.onchange = async () => {
+    const r = await fetch(`/api/projects/${pid}/sections/${inp.dataset.id}`, {method: 'PATCH', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({y: parseFloat(inp.value) || 0})});
+    if (r.ok) { const j = await r.json(); if (CH) CH.postMessage({type: 'section', section: j.section, pid}); load(false); }
+  });
+}
+async function fetchModel() {
+  const mode3 = document.querySelector('[name=mode]:checked').value;
+  const r = await fetch(`/api/projects/${pid}/model3d`, {method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({items: placed.map(o => ({sid: o.s.id, y: o.y})), mode: mode3})});
+  model = await r.json();
+  stageMax = Math.max(1, ...model.sections.map(s => stagesOf(s.geo).length - 1));
+  const st = $('#stage'), atEnd = +st.value >= +st.max;
+  st.max = stageMax; if (atEnd || +st.value > stageMax) st.value = stageMax;
+}
+async function load(fit) {
+  const p = await (await fetch('/api/projects/' + pid)).json();
+  $('#proj').textContent = (p.project.setup.info || {}).title || '';
+  sections = p.project.setup.sections || [];
+  if (!sections.length) { $('#why').textContent = 'No cross sections yet: upload them in Geometry first.'; return; }
+  placed = place(sections); table();
+  await fetchModel(); build(fit);
+}
+document.querySelectorAll('[name=mode]').forEach(e => e.onchange = async () => { await fetchModel(); build(false); });
+document.querySelectorAll('#shGhost, #shWall, #shAnch, #shWater, #shPlanes, #shPeople, #vex').forEach(e => e.onchange = () => build(false));
+$('#soilOp').oninput = () => { const v = +$('#soilOp').value; $('#soilOpT').textContent = v > 95 ? 'solid' : v < 3 ? 'hidden' : v + ' %'; build(false); };
+$('#stage').oninput = () => build(false);
+let playing = null;
+$('#play').onclick = () => {
+  if (playing) { clearInterval(playing); playing = null; $('#play').textContent = '▶ Play the sequence'; return; }
+  const st = $('#stage'); st.value = 0; build(false); $('#play').textContent = '■ Stop';
+  playing = setInterval(() => { if (+st.value >= +st.max) { clearInterval(playing); playing = null; $('#play').textContent = '▶ Play the sequence'; return; } st.value = +st.value + 1; build(false); }, 1400);
+};
+$('#reset').onclick = fitView; $('#reload').onclick = () => load(true);
+$('#full').onclick = () => { const el = document.documentElement; (document.fullscreenElement ? document.exitFullscreen() : (el.requestFullscreen || el.webkitRequestFullscreen).call(el)); };
+if (CH) CH.onmessage = ({data}) => { if (data.pid === pid) load(false); };
+load(true);
+</script>
+</body>
+</html>

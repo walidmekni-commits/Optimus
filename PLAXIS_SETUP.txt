@@ -1,0 +1,127 @@
+PLAXIS SETUP GUIDE - PLAXIS AI Design Automation
+=================================================
+
+The app talks to PLAXIS through PLAXIS' "remote scripting server", using a
+Python package called plxscripting. plxscripting comes with your PLAXIS
+installation. The app can't create it, but it can find it.
+
+Run the app on the same PC as PLAXIS.
+
+
+STEP 1 - Start the app
+----------------------
+1. Close any old app window (the black cmd window).
+2. Double-click run.bat in this folder.
+3. Your browser opens http://127.0.0.1:8000
+   (if it doesn't, type that address yourself).
+
+
+STEP 1b - The assistant (no API key needed)
+-------------------------------------------
+Without a key, the OFFLINE assistant is used. Type plain sentences, e.g.:
+   wall height from 9 to 12 m step 0.5
+   wall thickness between 0.6 and 1.2 m
+   friction angle of clay from 25 to 35 step 5
+   load combinations LC1: 1.0, LC2: 1.35, LC3: 1.5
+   moment at the top of the wall less than 100 kN.m
+   factor of safety at least 1.5
+   horizontal displacement below 40 mm / settlement below 25 mm
+   save the files
+   minimize the wall thickness
+   remove cohesion
+It fills the tables and tells you what is still missing. You can always
+edit the tables by hand (+ Add, or type in any cell), or upload a CSV
+with columns: name,label,unit,plaxis_ref,min,max,step
+Optional: an Anthropic API key in Settings switches to the Claude AI,
+which also reads drawings and PDFs (paid per use).
+
+
+STEP 2 - Start the PLAXIS remote scripting server (normally NOT needed: the app
+         finds or starts PLAXIS and switches the server on itself; this is the manual fallback)
+-------------------------------------------------
+1. Open PLAXIS 3D Input with your project.
+2. Menu: Expert > Configure remote scripting server.
+3. Port: keep 10000. Note the password (or set a new one).
+4. Press "Start server". It should say "The server is running".
+   Keep PLAXIS open while the app runs.
+
+
+STEP 3 - Connect the app
+------------------------
+1. In the app, click "Settings" (top right).
+2. Solver: PLAXIS (real calculations)
+3. Host: localhost    Port: 10000    Password: the one from PLAXIS
+4. Leave "plxscripting folder" EMPTY the first time.
+5. Press "Test connection".
+   - Success: it says "Connected" and lists your materials, plates,
+     anchors and phases. Press Save. You're done.
+   - "Could not find PLAXIS' plxscripting folder": go to Step 4.
+   - "Could not reach the PLAXIS remote scripting server": the server
+     isn't started, or the port or password is wrong (repeat Step 2).
+   - "needs a module that is missing: X": open cmd in this folder and
+     run:  python -m pip install X   then test again.
+
+
+STEP 4 - Find the plxscripting folder yourself (only if Step 3 failed)
+---------------------------------------------------------------------
+Easiest: double-click find_plaxis.bat in this folder. It searches your PC
+and prints the folder to paste.
+
+Or run these in cmd (each one can take a minute):
+
+    where /r "C:\Program Files" easy.py | findstr plxscripting
+    where /r "C:\ProgramData" easy.py | findstr plxscripting
+
+You will get a line like:
+
+    C:\Program Files\Seequent\PLAXIS 3D 2024.2\plxscripting\easy.py
+
+Take everything BEFORE "\plxscripting\easy.py":
+
+    C:\Program Files\Seequent\PLAXIS 3D 2024.2
+
+Paste it into "plxscripting folder" in Settings, then press
+Test connection again. (Pasting the ...\plxscripting folder itself also
+works.)
+
+If nothing is found at all, as a last resort install the copy from pip.
+It is packaged by a third party (CEMS), not Bentley:
+
+    python -m pip install plxscripting
+
+
+STEP 5 - Use it
+---------------
+1. Page 1: enter project title, user, date.
+   Input: choose "Project open in PLAXIS" (or "File on this PC" and
+   paste the .p3d path). Pick the objective and press Continue.
+2. Page 2: explain the problem to the AI assistant, check the Variable
+   parameters and Target output tables. The "PLAXIS ref" column must match
+   names in your model, e.g. Plate_1.d or a material name + property.
+   Wall height / levels: change point coordinates, e.g. "Point_7.z; Point_8.z"
+   (all listed points move together; the model is re-meshed for each run).
+   Result at a location: e.g. "Plate.M11 | Z = max" = moment at the top
+   of the wall, or "Plate.M11 | Z >= 10.5".
+   Press Review & run, then Approve.
+3. Each run is saved as its own PLAXIS project. If this app folder is in
+   OneDrive (e.g. on your Desktop), runs go to C:\Users\<you>\PLAXIS_runs
+   instead, because OneDrive syncing can lock PLAXIS files. You can pick
+   another folder under Settings > Runs folder. Your original model is
+   never changed.
+
+Note: the PLAXIS connection is new and has not yet been tested on a real
+PLAXIS installation. If something fails, send a screenshot of the error.
+
+READING THE MODEL GEOMETRY FROM PLAXIS (page 2 · PLAXIS model)
+---------------------------------------------------------------
+You don't have to start the scripting server yourself: when you create a project with your PLAXIS file, the
+app starts PLAXIS Input with its scripting server on (or uses the PLAXIS already open on the saved port),
+opens the project and reads it. You can also press "Read my PLAXIS project" on page 2. The app reads the points, lines, soil
+polygons, boreholes and layer levels, structures, loads, materials and phases of the project open in
+PLAXIS Input (or of the file given on page 1), in PLAXIS' own coordinates.
+
+If the app runs on another PC: press "Download export script" (plaxis_model.py), copy it to the PC with
+PLAXIS, open your project, start the remote scripting server, then in PLAXIS choose
+Expert > Python > Command prompt and run:
+    python plaxis_model.py --port 10000 --password YOURPASSWORD --out model.json
+Upload model.json on page 2 with "Upload model.json".

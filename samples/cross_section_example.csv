@@ -1,0 +1,16 @@
+line,x,level
+ground,0,-8
+ground,30,-8
+ground,30,0
+ground,42,0
+boundary,0,-8
+boundary,0,-20
+boundary,42,-20
+boundary,42,0
+wall,30,-8
+wall,30,-11
+layer,0,-14
+layer,42,-14
+anchor,30,-2
+anchor,36,-5
+anchor,40,-7
