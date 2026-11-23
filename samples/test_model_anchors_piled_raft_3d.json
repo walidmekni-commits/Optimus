@@ -1,0 +1,764 @@
+{
+ "version": "3d",
+ "source": "demo",
+ "name": "Wall with 4 anchor rows and a piled raft (test model)",
+ "product": "PLAXIS 3D (example)",
+ "points": [
+  {
+   "name": "Point_1",
+   "x": 0,
+   "y": 0.0,
+   "z": 0
+  },
+  {
+   "name": "Point_2",
+   "x": 60.0,
+   "y": 0.0,
+   "z": 0
+  },
+  {
+   "name": "Point_3",
+   "x": 60.0,
+   "y": 0.0,
+   "z": -30.0
+  },
+  {
+   "name": "Point_4",
+   "x": 0,
+   "y": 0.0,
+   "z": -30.0
+  },
+  {
+   "name": "Point_5",
+   "x": 20.0,
+   "y": 0.0,
+   "z": 0
+  },
+  {
+   "name": "Point_6",
+   "x": 20.0,
+   "y": 0.0,
+   "z": -18.0
+  },
+  {
+   "name": "Point_7",
+   "x": 20.0,
+   "y": 0.0,
+   "z": -2.0
+  },
+  {
+   "name": "Point_8",
+   "x": 32.0,
+   "y": 0.0,
+   "z": -8.0
+  },
+  {
+   "name": "Point_9",
+   "x": 36.0,
+   "y": 0.0,
+   "z": -10.5
+  },
+  {
+   "name": "Point_10",
+   "x": 0,
+   "y": 0.0,
+   "z": -10.0
+  },
+  {
+   "name": "Point_11",
+   "x": 20.0,
+   "y": 0.0,
+   "z": -10.0
+  },
+  {
+   "name": "Point_12",
+   "x": 22.0,
+   "y": 0.0,
+   "z": 0
+  },
+  {
+   "name": "Point_13",
+   "x": 32.0,
+   "y": 0.0,
+   "z": 0
+  },
+  {
+   "name": "Point_14",
+   "x": 20.0,
+   "y": 20.0,
+   "z": 0
+  },
+  {
+   "name": "Point_15",
+   "x": 20.0,
+   "y": 20.0,
+   "z": -18.0
+  },
+  {
+   "name": "Point_16",
+   "x": 20.0,
+   "y": 20.0,
+   "z": -2.0
+  },
+  {
+   "name": "Point_17",
+   "x": 20.0,
+   "y": 5.0,
+   "z": -2.0
+  },
+  {
+   "name": "Point_18",
+   "x": 32.0,
+   "y": 5.0,
+   "z": -8.0
+  },
+  {
+   "name": "Point_19",
+   "x": 20.0,
+   "y": 10.0,
+   "z": -2.0
+  },
+  {
+   "name": "Point_20",
+   "x": 32.0,
+   "y": 10.0,
+   "z": -8.0
+  },
+  {
+   "name": "Point_21",
+   "x": 20.0,
+   "y": 15.0,
+   "z": -2.0
+  },
+  {
+   "name": "Point_22",
+   "x": 32.0,
+   "y": 15.0,
+   "z": -8.0
+  },
+  {
+   "name": "Point_23",
+   "x": 40.0,
+   "y": 6.0,
+   "z": 0.0
+  },
+  {
+   "name": "Point_24",
+   "x": 40.0,
+   "y": 6.0,
+   "z": -14.0
+  },
+  {
+   "name": "Point_25",
+   "x": 40.0,
+   "y": 12.0,
+   "z": 0.0
+  },
+  {
+   "name": "Point_26",
+   "x": 40.0,
+   "y": 12.0,
+   "z": -14.0
+  },
+  {
+   "name": "Point_27",
+   "x": 44.0,
+   "y": 6.0,
+   "z": 0.0
+  },
+  {
+   "name": "Point_28",
+   "x": 44.0,
+   "y": 6.0,
+   "z": -14.0
+  },
+  {
+   "name": "Point_29",
+   "x": 44.0,
+   "y": 12.0,
+   "z": 0.0
+  },
+  {
+   "name": "Point_30",
+   "x": 44.0,
+   "y": 12.0,
+   "z": -14.0
+  },
+  {
+   "name": "Point_31",
+   "x": 48.0,
+   "y": 6.0,
+   "z": 0.0
+  },
+  {
+   "name": "Point_32",
+   "x": 48.0,
+   "y": 6.0,
+   "z": -14.0
+  },
+  {
+   "name": "Point_33",
+   "x": 48.0,
+   "y": 12.0,
+   "z": 0.0
+  },
+  {
+   "name": "Point_34",
+   "x": 48.0,
+   "y": 12.0,
+   "z": -14.0
+  }
+ ],
+ "lines": [
+  {
+   "name": "Line_1",
+   "a": "Point_5",
+   "b": "Point_6"
+  },
+  {
+   "name": "Line_2",
+   "a": "Point_7",
+   "b": "Point_8"
+  },
+  {
+   "name": "Line_3",
+   "a": "Point_8",
+   "b": "Point_9"
+  },
+  {
+   "name": "Line_4",
+   "a": "Point_12",
+   "b": "Point_13"
+  },
+  {
+   "name": "Line_5",
+   "a": "Point_10",
+   "b": "Point_11"
+  }
+ ],
+ "soil_polygons": [],
+ "boreholes": [
+  {
+   "name": "Borehole_1",
+   "x": 0.0,
+   "y": 0.0,
+   "head": -4.0,
+   "layers": [
+    {
+     "name": "Soillayer_1",
+     "material": "Fill",
+     "top": 0.0,
+     "bottom": -3.0
+    },
+    {
+     "name": "Soillayer_2",
+     "material": "Clay",
+     "top": -3.0,
+     "bottom": -12.0
+    },
+    {
+     "name": "Soillayer_3",
+     "material": "Sand",
+     "top": -12.0,
+     "bottom": -30.0
+    }
+   ]
+  }
+ ],
+ "structures": [
+  {
+   "kind": "plate",
+   "name": "Plate_1",
+   "material": "DWall",
+   "points": [
+    [
+     20.0,
+     0.0,
+     0
+    ],
+    [
+     20.0,
+     0.0,
+     -18.0
+    ],
+    [
+     20.0,
+     20.0,
+     -18.0
+    ],
+    [
+     20.0,
+     20.0,
+     0
+    ]
+   ]
+  },
+  {
+   "kind": "anchor",
+   "name": "NodeToNodeAnchor_1",
+   "material": "Anchor",
+   "points": [
+    [
+     20.0,
+     0.0,
+     -2.0
+    ],
+    [
+     32.0,
+     0.0,
+     -8.0
+    ]
+   ]
+  },
+  {
+   "kind": "geogrid",
+   "name": "Geogrid_1",
+   "material": "Grout",
+   "points": [
+    [
+     32.0,
+     0.0,
+     -8.0
+    ],
+    [
+     36.0,
+     0.0,
+     -10.5
+    ]
+   ]
+  },
+  {
+   "kind": "anchor",
+   "name": "NodeToNodeAnchor_2",
+   "material": "Anchor",
+   "points": [
+    [
+     20.0,
+     5.0,
+     -2.0
+    ],
+    [
+     32.0,
+     5.0,
+     -8.0
+    ]
+   ]
+  },
+  {
+   "kind": "anchor",
+   "name": "NodeToNodeAnchor_3",
+   "material": "Anchor",
+   "points": [
+    [
+     20.0,
+     10.0,
+     -2.0
+    ],
+    [
+     32.0,
+     10.0,
+     -8.0
+    ]
+   ]
+  },
+  {
+   "kind": "anchor",
+   "name": "NodeToNodeAnchor_4",
+   "material": "Anchor",
+   "points": [
+    [
+     20.0,
+     15.0,
+     -2.0
+    ],
+    [
+     32.0,
+     15.0,
+     -8.0
+    ]
+   ]
+  },
+  {
+   "kind": "embedded_beam",
+   "name": "EmbeddedBeam_1",
+   "material": "Pile",
+   "points": [
+    [
+     40.0,
+     6.0,
+     0.0
+    ],
+    [
+     40.0,
+     6.0,
+     -14.0
+    ]
+   ]
+  },
+  {
+   "kind": "embedded_beam",
+   "name": "EmbeddedBeam_2",
+   "material": "Pile",
+   "points": [
+    [
+     40.0,
+     12.0,
+     0.0
+    ],
+    [
+     40.0,
+     12.0,
+     -14.0
+    ]
+   ]
+  },
+  {
+   "kind": "embedded_beam",
+   "name": "EmbeddedBeam_3",
+   "material": "Pile",
+   "points": [
+    [
+     44.0,
+     6.0,
+     0.0
+    ],
+    [
+     44.0,
+     6.0,
+     -14.0
+    ]
+   ]
+  },
+  {
+   "kind": "embedded_beam",
+   "name": "EmbeddedBeam_4",
+   "material": "Pile",
+   "points": [
+    [
+     44.0,
+     12.0,
+     0.0
+    ],
+    [
+     44.0,
+     12.0,
+     -14.0
+    ]
+   ]
+  },
+  {
+   "kind": "embedded_beam",
+   "name": "EmbeddedBeam_5",
+   "material": "Pile",
+   "points": [
+    [
+     48.0,
+     6.0,
+     0.0
+    ],
+    [
+     48.0,
+     6.0,
+     -14.0
+    ]
+   ]
+  },
+  {
+   "kind": "embedded_beam",
+   "name": "EmbeddedBeam_6",
+   "material": "Pile",
+   "points": [
+    [
+     48.0,
+     12.0,
+     0.0
+    ],
+    [
+     48.0,
+     12.0,
+     -14.0
+    ]
+   ]
+  }
+ ],
+ "loads": [
+  {
+   "kind": "surface",
+   "name": "SurfaceLoad_1_1",
+   "props": {
+    "sigz": -10.0
+   },
+   "points": [
+    [
+     22.0,
+     0.0,
+     0
+    ],
+    [
+     32.0,
+     0.0,
+     0
+    ],
+    [
+     32.0,
+     20.0,
+     0
+    ],
+    [
+     22.0,
+     20.0,
+     0
+    ]
+   ]
+  }
+ ],
+ "materials": [
+  {
+   "name": "Fill",
+   "id": "Fill",
+   "kind": "soil",
+   "model": "Hardening soil",
+   "props": {
+    "gammaUnsat": 17,
+    "gammaSat": 19,
+    "E50ref": 20000,
+    "Eoedref": 20000,
+    "Eurref": 60000,
+    "cref": 1,
+    "phi": 30,
+    "psi": 0
+   }
+  },
+  {
+   "name": "Clay",
+   "id": "Clay",
+   "kind": "soil",
+   "model": "Hardening soil",
+   "props": {
+    "gammaUnsat": 16,
+    "gammaSat": 18,
+    "E50ref": 12000,
+    "Eoedref": 8000,
+    "Eurref": 36000,
+    "cref": 10,
+    "phi": 25,
+    "psi": 0
+   }
+  },
+  {
+   "name": "Sand",
+   "id": "Sand",
+   "kind": "soil",
+   "model": "Hardening soil",
+   "props": {
+    "gammaUnsat": 18,
+    "gammaSat": 20,
+    "E50ref": 40000,
+    "Eoedref": 40000,
+    "Eurref": 120000,
+    "cref": 0.5,
+    "phi": 34,
+    "psi": 4
+   }
+  },
+  {
+   "name": "DWall",
+   "id": "Diaphragm wall",
+   "kind": "plate",
+   "props": {
+    "E1": 30000000.0,
+    "d": 0.8,
+    "Gamma": 25
+   }
+  },
+  {
+   "name": "Anchor",
+   "id": "Anchor rod",
+   "kind": "anchor",
+   "props": {
+    "EA": 250000.0,
+    "Lspacing": 2.5
+   }
+  },
+  {
+   "name": "Grout",
+   "id": "Grout body",
+   "kind": "geogrid",
+   "props": {
+    "EA": 100000.0
+   }
+  },
+  {
+   "name": "Pile",
+   "id": "Pile",
+   "kind": "embedded_beam",
+   "model": "Elastic",
+   "props": {
+    "E": 30000000.0,
+    "Diameter": 0.8,
+    "Lspacing": 4.0
+   }
+  }
+ ],
+ "phases": [
+  {
+   "name": "InitialPhase",
+   "id": "Initial phase",
+   "type": "K0 procedure",
+   "settings": {
+    "TimeInterval": 0.0,
+    "Deform.ToleratedError": 0.01,
+    "Deform.MaxSteps": 1000.0
+   }
+  },
+  {
+   "name": "Phase_1",
+   "id": "Wall + surcharge",
+   "type": "Plastic",
+   "settings": {
+    "TimeInterval": 0.0,
+    "Deform.ToleratedError": 0.01,
+    "Deform.MaxSteps": 1000.0
+   }
+  },
+  {
+   "name": "Phase_2",
+   "id": "Excavation to -3 m",
+   "type": "Plastic",
+   "settings": {
+    "TimeInterval": 0.0,
+    "Deform.ToleratedError": 0.01,
+    "Deform.MaxSteps": 1000.0
+   }
+  },
+  {
+   "name": "Phase_3",
+   "id": "Anchor + prestress",
+   "type": "Plastic",
+   "settings": {
+    "TimeInterval": 0.0,
+    "Deform.ToleratedError": 0.01,
+    "Deform.MaxSteps": 1000.0
+   }
+  },
+  {
+   "name": "Phase_4",
+   "id": "Excavation to -10 m",
+   "type": "Plastic",
+   "settings": {
+    "TimeInterval": 0.0,
+    "Deform.ToleratedError": 0.01,
+    "Deform.MaxSteps": 1000.0
+   }
+  },
+  {
+   "name": "Phase_5",
+   "id": "Safety",
+   "type": "Safety",
+   "settings": {
+    "TimeInterval": 0.0,
+    "Deform.ToleratedError": 0.01,
+    "Deform.MaxSteps": 1000.0
+   }
+  }
+ ],
+ "water": [
+  {
+   "name": "GeneralWaterLevel",
+   "points": [
+    [
+     0,
+     0,
+     -4
+    ],
+    [
+     60.0,
+     0,
+     -4
+    ],
+    [
+     60.0,
+     20.0,
+     -4
+    ],
+    [
+     0,
+     20.0,
+     -4
+    ]
+   ]
+  }
+ ],
+ "mesh": {
+  "level": "Medium"
+ },
+ "staged": [
+  {
+   "object": "SurfaceLoad_1_1",
+   "prop": "sigz",
+   "phase": "Phase_1",
+   "value": -10.0,
+   "kind": "load",
+   "unit": "kN/m\u00b2"
+  },
+  {
+   "object": "SurfaceLoad_1_1",
+   "prop": "sigz",
+   "phase": "Phase_2",
+   "value": -10.0,
+   "kind": "load",
+   "unit": "kN/m\u00b2"
+  },
+  {
+   "object": "SurfaceLoad_1_1",
+   "prop": "sigz",
+   "phase": "Phase_3",
+   "value": -10.0,
+   "kind": "load",
+   "unit": "kN/m\u00b2"
+  },
+  {
+   "object": "SurfaceLoad_1_1",
+   "prop": "sigz",
+   "phase": "Phase_4",
+   "value": -10.0,
+   "kind": "load",
+   "unit": "kN/m\u00b2"
+  },
+  {
+   "object": "NodeToNodeAnchor_1",
+   "prop": "PrestressForce",
+   "phase": "Phase_3",
+   "value": 300.0,
+   "unit": "kN",
+   "kind": "anchor"
+  }
+ ],
+ "notes": [
+  "Example model: PLAXIS is not connected (simulated solver). Connect PLAXIS in Settings, or upload model.json made by plaxis_model.py, to read your own project."
+ ],
+ "extents": {
+  "xmin": 0,
+  "xmax": 60.0,
+  "ymin": 0.0,
+  "ymax": 20.0,
+  "zmin": -30.0,
+  "zmax": 0
+ },
+ "axes": [
+  "x",
+  "y",
+  "z"
+ ],
+ "vertical": "z",
+ "counts": {
+  "points": 34,
+  "lines": 5,
+  "soil_polygons": 0,
+  "boreholes": 1,
+  "structures": 12,
+  "loads": 1,
+  "materials": 7,
+  "phases": 6
+ }
+}
