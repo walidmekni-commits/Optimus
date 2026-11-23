@@ -51,7 +51,9 @@ def figure(spec: dict) -> bytes:
             ax.axvline(d, color="#c8d0c8", lw=0.8, zorder=0)
             ax.annotate(lab, (d, 1.0), xycoords=("data", "axes fraction"), rotation=90, fontsize=6.5, va="top",
                         ha="right", color="#56695c")
-        ax.set_xlabel("Time (days)")
+        if spec.get("xticks"):  # the X-axis by construction stage
+            ax.set_xticks([a for a, _ in spec["xticks"]], [b for _, b in spec["xticks"]], rotation=20, ha="right", fontsize=7)
+        ax.set_xlabel(spec.get("xlabel") or "Time (days)")
         ax.set_ylabel(f"{t['label']}{_unit(t)}")
         ax.legend(loc="best", fontsize=7.5)
     elif k == "sensitivity":
