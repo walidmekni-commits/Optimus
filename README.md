@@ -1,5 +1,32 @@
 # PLAXIS AI Design Automation
 
+## OPTIMUS® V26.1.9 · revised module interface, part 1 (Dr. Walid's remarks of 23 Nov 2026, A3 design Rev B)
+
+- **Switching between modules:** the module tabs are now large boxes side by side, like the Puzzle, joined by arrows. The
+  arrows show chain A (Sensitivity → Optimization → Modification → Scenarios); Calibration (chain B → Modification) and
+  Advanced reporting follow. Each box shows the state of its latest study. Hover an arrow to see what it hands over.
+- **Study plan (first page of the study page, W6.2):** the study page opens on it. Choose one module, or several modules
+  in your own order (start from chain A, chain B or an empty plan; drag ≡ or use ↑ ↓ to reorder). The plan is saved with
+  the project, and with a plan the boxes follow its order with step numbers.
+- **Design modification, many modification runs (W1.1–W1.3, W1.5, W1.6):** each item takes one or more new values (one
+  Puzzle box each). The Runs box asks for the **Number of modifications** (1–20) and how to rank them (least change that
+  meets every criterion, or largest governing margin). Modification k takes the k-th value of each item, or tick
+  **Match the puzzle** to build each package from the boxes yourself. Each modification can have a name. The results
+  show one column per modification with ✓ / ✗, change %, effect, governing margin and rank, and **Choose ★** picks the
+  one handed to Design scenarios. The figures and the Word and Excel reports follow: a modifications table, the
+  comparison, and a ranking chapter. A study saved before this version (one new value) works as before.
+- **What next? (W4.1–W4.3):** a card after the report of every module asks the next question (for optimization, in
+  Dr. Walid's words: "Would you like to proceed with Design Modification and Design Scenarios?"). The suggestions can be
+  reordered, removed or added, and the order is saved in the Study plan. The order follows the results: Optimization
+  moves up when no modification passes, and + Add new runs comes first when an optimization fails or a calibration
+  ends at the edge of its range. **Proceed** opens the next module pre-filled; **Pre-fill only** prepares it for later.
+- **Handover Optimization → Design modification (W5):** the recommended run becomes Modification 1, the interpolated
+  limit becomes Modification 2, the other passing runs become Puzzle boxes, and the targets become acceptance criteria.
+  A "Linked input" chip says where the values came from, and **Unlink** keeps them as ordinary inputs. Nothing is
+  calculated until Run is pressed. The other arrows open the next module with the results already chosen.
+- Still to come (part 2): Report All the Details, Stages to report in Advanced reporting, the Project details screen,
+  reuse of runs already calculated, and the full handovers of the other arrows (base scenario, calibrated model).
+
 ## OPTIMUS® V26.1.9 (missing PLAXIS features, batch 1: the P1 items for excavation and wall design)
 
 From the QA/QC *Report for Missing Features* (24 Nov 2026). The 13 P1 items, available in every module:

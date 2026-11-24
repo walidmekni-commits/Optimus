@@ -107,6 +107,79 @@
   .tabs button { border-radius:99px; padding:.35rem 1rem; font-weight:500; }
   .tabs button.on { background:var(--accent); border-color:var(--accent); color:var(--accent-ink); font-weight:600; }
   .tabs .hint { align-self:center; color:var(--muted); font-size:.88rem; margin-left:.4rem; }
+  /* Rev B (Walid, 24 Nov 2026): the switching between modules as large boxes side by side, like the Puzzle, joined by arrows */
+  .mstrip { display:flex; align-items:stretch; gap:0; overflow-x:auto; padding:.35rem .1rem .55rem; margin-bottom:.2rem; scrollbar-width:thin; }
+  .mbox { position:relative; flex:1 1 0; min-width:9.6rem; max-width:17rem; display:grid; grid-template-columns:auto 1fr; grid-template-rows:auto auto;
+          column-gap:.6rem; row-gap:.15rem; align-items:center; text-align:left; padding:.75rem .85rem .7rem; border-radius:1rem;
+          background:linear-gradient(180deg, var(--card), color-mix(in srgb, var(--soft) 55%, var(--card))); border:1.5px solid var(--line);
+          box-shadow:0 2px 10px rgba(10,25,15,.18); color:var(--ink); cursor:pointer; transition:transform .15s, box-shadow .15s, border-color .15s; }
+  .mbox:hover:not(:disabled) { transform:translateY(-2px); box-shadow:0 8px 22px rgba(10,25,15,.28); border-color:var(--accent); }
+  .mbox svg { grid-row:1 / 3; width:2.3rem; height:2.3rem; color:var(--accent); flex:none; }
+  .mbox b { font-size:.98rem; line-height:1.2; font-weight:700; white-space:normal; }
+  .mbox > * { min-width:0; } .mbox { white-space:normal; }
+  .mbox .ms { font-size:.76rem; color:var(--muted); line-height:1.25; }
+  .mbox .ms .ok { color:var(--ok); font-weight:700; }
+  .mbox .ms .run { color:var(--accent2); font-weight:700; }
+  .mbox .step { position:absolute; top:-.55rem; left:.7rem; min-width:1.35rem; height:1.35rem; padding:0 .35rem; border-radius:99px; display:grid; place-items:center;
+                font-size:.72rem; font-weight:800; background:#e8b46a; color:#2a1d07; box-shadow:0 1px 4px rgba(0,0,0,.25); }
+  .mbox .step.done { background:var(--ok); color:#fff; }
+  .mbox.on { background:linear-gradient(180deg, color-mix(in srgb, var(--accent) 88%, #fff), var(--accent)); border-color:var(--accent); color:var(--accent-ink);
+             box-shadow:0 0 0 3px color-mix(in srgb, var(--accent) 30%, transparent), 0 8px 22px rgba(10,25,15,.3); }
+  .mbox.on svg, .mbox.on .ms, .mbox.on .ms .ok, .mbox.on .ms .run { color:var(--accent-ink); }
+  .mbox.plan { flex:0 0 auto; min-width:8.6rem; background:linear-gradient(180deg, #fffaf0, #f7e7c4); border-color:#e1c58c; color:#3b2a0b; }
+  .mbox.plan svg { color:#b07f00; } .mbox.plan .ms { color:#7a6332; }
+  .mbox.plan.on { background:linear-gradient(180deg, #f0c470, #d99d2b); border-color:#c98a17; color:#26190a; box-shadow:0 0 0 3px rgba(217,157,43,.35), 0 8px 22px rgba(10,25,15,.3); }
+  .mbox.plan.on svg, .mbox.plan.on .ms { color:#26190a; }
+  .marrow { flex:0 0 3.1rem; display:grid; place-items:center; position:relative; }
+  .marrow svg { width:3.1rem; height:1.6rem; overflow:visible; filter:drop-shadow(0 1px 2px rgba(0,0,0,.45)); }
+  .marrow path { fill:none; stroke-width:2.6; stroke-linecap:round; stroke-linejoin:round; }
+  .marrow .head { stroke-width:2.6; }
+  .marrow.soft { opacity:.6; } .marrow.soft path { stroke-dasharray:3 5; }
+  .marrow .ch { position:absolute; bottom:-.05rem; font-size:.6rem; font-weight:800; letter-spacing:.06em; color:#f3d79d; text-shadow:0 1px 2px rgba(0,0,0,.6); }
+  .msep { flex:0 0 1.4rem; display:grid; place-items:center; }
+  .msep::before { content:""; width:2px; height:70%; border-radius:2px; background:linear-gradient(180deg, transparent, rgba(255,255,255,.55), transparent); }
+  .mhint { color:#e6ecf5; font-size:.86rem; margin:0 0 .75rem .2rem; text-shadow:0 1px 2px rgba(0,0,0,.55); }
+  .mhint b { color:#f3d79d; font-weight:700; }
+  #study.planview > :not(#modeTabs):not(#modeHint):not(#planPage) { display:none !important; }
+  /* the Study plan page */
+  .plq { display:flex; gap:.7rem; flex-wrap:wrap; margin:.2rem 0 .9rem; }
+  .plq button { display:grid; gap:.15rem; text-align:left; padding:.7rem 1rem; border-radius:.8rem; min-width:16rem; }
+  .plq button b { font-size:1rem; } .plq button span { font-size:.8rem; color:var(--muted); }
+  .plq button.on { border-color:var(--accent); background:var(--soft); box-shadow:0 0 0 2px var(--accent) inset; }
+  .plChains { display:flex; gap:.5rem; flex-wrap:wrap; align-items:center; margin:.3rem 0 .8rem; }
+  .plFlow { display:flex; align-items:stretch; overflow-x:auto; padding:.6rem .2rem .9rem; margin:.2rem 0 .6rem; border-radius:.8rem;
+            background:linear-gradient(135deg, #1d3a2b, #274d3a); }
+  .plFlow .mbox { cursor:grab; } .plFlow .mbox.drag { opacity:.4; }
+  .plTbl td { vertical-align:middle; } .plTbl .hdl { cursor:grab; color:var(--muted); font-size:1.1rem; user-select:none; }
+  .plTbl tr.over td { box-shadow:0 -2px 0 var(--accent) inset; }
+  .plNote { margin-top:.8rem; padding:.6rem .8rem; border-left:4px solid #e8b46a; background:var(--soft2); border-radius:.4rem; font-size:.88rem; }
+  /* What next? */
+  .nxQ { font-size:1.12rem; font-weight:700; margin:.1rem 0 .7rem; color:var(--ink); }
+  .nxRow { display:grid; grid-template-columns:auto auto minmax(10rem, 14rem) 1fr auto; gap:.7rem; align-items:center; padding:.6rem .7rem; border:1.5px solid var(--line);
+           border-radius:.8rem; margin-bottom:.45rem; background:var(--card); }
+  .nxRow.first { border-color:var(--accent); background:color-mix(in srgb, var(--accent) 6%, var(--card)); }
+  .nxRow.over { box-shadow:0 -3px 0 var(--accent); }
+  .nxRow .hdl { cursor:grab; color:var(--muted); font-size:1.15rem; user-select:none; }
+  .nxRow .no { font-weight:800; color:var(--accent); }
+  .nxRow .tt { display:flex; gap:.5rem; align-items:center; font-weight:700; } .nxRow .tt svg { width:1.6rem; height:1.6rem; color:var(--accent); flex:none; }
+  .nxRow .why { font-size:.84rem; color:var(--muted); } .nxRow .why b { color:var(--ink); font-weight:600; }
+  .nxRow .act { display:flex; gap:.35rem; flex-wrap:wrap; justify-content:flex-end; }
+  .nxFoot { display:flex; gap:.5rem; flex-wrap:wrap; align-items:center; margin-top:.5rem; }
+  @media (max-width:800px) { .nxRow { grid-template-columns:auto 1fr; } .nxRow .why, .nxRow .act { grid-column:1 / -1; } }
+  /* the linked input (source chip) */
+  .linkChip { display:flex; gap:.6rem; align-items:center; flex-wrap:wrap; padding:.55rem .8rem; margin:-.2rem 0 .8rem; border-radius:.7rem;
+              background:linear-gradient(90deg, #fff5de, var(--card)); border:1.5px solid #e1c58c; font-size:.86rem; color:#3b2a0b; }
+  .linkChip b { color:#7a4f00; }
+  /* Design modification: several new values per item, and the modifications compared */
+  .dvals { display:flex; gap:.35rem; flex-wrap:wrap; align-items:center; }
+  .dbox { display:inline-flex; align-items:center; gap:.2rem; border:1.5px solid color-mix(in srgb, var(--accent) 45%, var(--line)); border-radius:.55rem; padding:.1rem .15rem .1rem .35rem; background:var(--soft); }
+  .dbox i { font-style:normal; font-size:.7rem; font-weight:700; color:var(--accent); }
+  .dbox input, .dbox select { width:6.2rem; border:0; background:transparent; padding:.15rem .2rem; }
+  .dbox .dx { border:0; background:transparent; padding:0 .25rem; color:var(--muted); }
+  .mname { display:block; width:11rem; font-size:.82rem; padding:.15rem .35rem; margin-top:.2rem; }
+  .modT th, .modT td { white-space:nowrap; } .modT td.v { text-align:right; } .modT th.ch { background:color-mix(in srgb, var(--ok) 14%, transparent); }
+  .modT .cg { font-size:.76rem; color:var(--muted); display:block; } .modT .cg.good { color:var(--ok); } .modT .cg.bad { color:var(--bad); }
+  .modT tr.sum td { font-weight:600; background:var(--soft); }
   .geo .bar { display:flex; gap:.4rem; flex-wrap:wrap; align-items:center; padding:.5rem .8rem; border-bottom:1px solid var(--line); }
   .geo .bar .sp { flex:1; }
   .geoBox { display:grid; grid-template-columns:minmax(0, 1fr) minmax(15rem, 22rem); min-height:0; }
@@ -598,10 +671,13 @@
 
 <!-- ============ STUDY ============ -->
 <div class="wrap hidden" id="study">
-  <div class="tabs" id="modeTabs"></div>
+  <nav class="mstrip" id="modeTabs" aria-label="Study plan and modules"></nav>
+  <div class="mhint" id="modeHint"></div>
+  <div id="planPage" class="hidden"></div>
   <div class="newBar"><button class="primary" id="stuNew">＋ Add New Sensitivity Analysis</button><span class="meta" id="stuNewMeta"></span></div>
 
   <div class="curStu" id="curStu"></div>
+  <div id="linkBox"></div>
   <div class="cols top">
     <section class="card" id="outCard">
       <h2><span class="n">1</span><span id="outTitle"></span><span class="hint" id="outHint"></span></h2>
@@ -619,6 +695,7 @@
         <label id="nWrap"><span id="nLabel">Number of runs</span><input type="number" id="nRuns" min="1" max="200" step="1"></label>
         <label id="distWrap">Distribution <span class="seg" id="dist"><button data-v="even">Even</button><button data-v="custom">Customize</button></span></label>
         <label id="baseWrap"><input type="checkbox" id="baseline"> Run 0 = existing design</label>
+        <label id="rankWrap" class="hidden" title="How the modifications are ranked in the results">Rank by <span class="seg" id="rankBy"><button data-v="least" title="Least change that meets every criterion (closest to the existing design)">least change</button><button data-v="margin" title="Largest governing margin against the criteria">largest margin</button></span></label>
         <label id="factWrap" class="hidden" title="Every value of each variable with every value of the others (scenario matrix)"><input type="checkbox" id="factorial"> All combinations</label>
         <label id="timeWrap" title="Read the results at the date of every stage, and after a long-term consolidation phase added after the last stage"><input type="checkbox" id="timeOn"> Results over time</label>
         <label id="ltWrap" class="hidden">Long term <input type="number" id="ltDays" min="0" step="1" style="width:5rem"> days after the last stage</label>
@@ -655,7 +732,7 @@
       </div>
     </section>
     <section class="card">
-      <h2><span class="n">3</span>Scheduled runs<span class="hint">edit a value to change a run</span></h2>
+      <h2><span class="n">3</span><span id="schedTitle">Scheduled runs</span><span class="hint" id="schedHint">edit a value to change a run</span></h2>
       <div class="body">
       <div id="schedWrap">
         <div class="pzBar"><label title="Each run is made of the puzzle boxes you put into it"><input type="checkbox" id="pzOn"> 🧩 Match the puzzle</label>
@@ -738,6 +815,12 @@
       </div>
       <div class="rep" id="repB"></div>
     </div>
+  </section>
+
+  <section class="card hidden" id="nextCard">
+    <h2><span class="n">6</span>What next?<span class="hint">OPTIMUS proposes · drag ≡ to change the order · the order is saved in the Study plan</span><span class="sp"></span>
+      <button class="small ghost" id="nextHide" title="Close this card; it comes back from the module box">Not now</button></h2>
+    <div class="body" id="nextBody"></div>
   </section>
 </div>
 
@@ -1093,6 +1176,8 @@ async function _openProject(pid, mode) {
   P = r.project; remember(); STUDIES = []; renderDisc();
   const sv = (P.setup || {}).saved || {}; DIRTY = !sv.at || (P.updated_at - sv.at > 2); const d0 = DIRTY;
   $('#hdrProj').textContent = [(P.setup.info || {}).title, 'PLAXIS ' + (P.setup.plaxis || '2d').toUpperCase()].filter(Boolean).join(' · ');
+  await loadPlan();
+  PLANVIEW = !mode;  // Rev B (Walid, 24 Nov 2026): the study page opens on its first page, the Study plan
   await loadStudy();
   if (mode && S.mode !== mode) await setMode(mode);
   await loadModel();
@@ -1138,7 +1223,15 @@ function syncGeo() {
   Object.keys(PMAP).filter(k => k.startsWith('grp:')).forEach(k => delete PMAP[k]);
   S.geo.forEach(e => { const c = geoCand(e); CAT.params.push(c); PMAP[c.key] = c; });
 }
-async function setMode(m) { S.mode = m; renderAll(); await saveNow(); syncTaskToMode(); }
+async function setMode(m) {
+  PLANVIEW = false;
+  const pf = PREFILL[m];
+  if (pf && P) {  // Rev B: a module pre-filled by "Pre-fill only" in What next? opens with that handover
+    delete PREFILL[m]; api(`/api/projects/${P.id}/prefill/${m}`, {method: 'DELETE'}).catch(() => {});
+    S = {...JSON.parse(JSON.stringify(pf)), geo: pf.geo || S.geo || []}; syncGeo(); clearResults(); renderAll(); await saveNow(); renderSched(); renderStudies();
+    toast(`${(MODES[m] || {}).title || m} opened with the inputs handed over: check them, then press Run.`); return; }
+  S.mode = m; renderAll(); await saveNow(); syncTaskToMode();
+}
 
 /* ============ STUDIES OF EACH TAB: Add New + the list (open, delete) ============ */
 const NEWTXT = {sensitivity: ['Sensitivity Analysis', 'Sensitivity analyses'], optimize: ['Optimization Study', 'Optimization studies'],
@@ -1166,6 +1259,7 @@ function renderStudies() {
       <span class="sp"></span>${st}<button class="small del" data-del="${esc(x.task)}" title="${busy ? 'Running: stop it first' : 'Delete this study and its run files'}"${busy ? ' disabled' : ''}>🗑</button></div>`; }).join('')
     || `<div class="meta">No ${esc(nt[1].toLowerCase())} yet. Set one up and press Run: it appears here.</div>`;
   renderCurStu(mine, nt, when);
+  try { renderStrip(); renderLink(); if (PLANVIEW) renderPlanPage(); } catch (e) { console.error('strip', e); }
 }
 function renderCurStu(mine, nt, when) {  // the analysis on screen, above the control parameters
   const x = mine.find(y => y.task === TASK), el = $('#curStu'); if (!el) return;
@@ -1175,7 +1269,7 @@ function renderCurStu(mine, nt, when) {  // the analysis on screen, above the co
 }
 function clearResults() {
   clearTimeout(pollT); TASK = null; RES = null; RAN = null;
-  $('#resCard').classList.add('hidden'); $('#repCard').classList.add('hidden');
+  $('#resCard').classList.add('hidden'); $('#repCard').classList.add('hidden'); $('#nextCard').classList.add('hidden'); NEXT = null;
 }
 async function syncTaskToMode() {  // a tab shows its own latest study
   const cur = STUDIES.find(x => x.task === TASK);
@@ -1214,20 +1308,21 @@ $('#stuList').addEventListener('click', async e => {
 const TXT = {
   sensitivity: {par: 'Variable input criteria', parHint: 'one parameter is recommended', out: 'Control parameters', outHint: 'the PLAXIS results to follow', add: '+ Add control parameter', n: 'Total number of runs'},
   optimize: {par: 'Variable input criteria', parHint: 'varied together', out: 'Target optimization criteria', outHint: 'what the design must achieve', add: '+ Add target', n: 'Total number of runs'},
-  design_change: {par: 'Design modification', parHint: 'what changes in the existing design', out: 'Results to compare', outHint: 'existing and modified design', add: '+ Add result', n: ''},
+  design_change: {par: 'Design modification', parHint: 'what changes in the existing design · each new value is a 🧩 Puzzle box', out: 'Results to compare', outHint: 'existing design and every modification', add: '+ Add result', n: ''},
   combinations: {par: 'Scenario parameters', parHint: 'one value per scenario', out: 'Results to summarize', outHint: 'read in every scenario', add: '+ Add result', n: 'Total number of runs'},
   calibration: {par: 'Uncertain input parameters', parHint: 'varied together to match the measurements', out: 'Measured values', outHint: 'what was measured on site, matched by the PLAXIS results', add: '+ Add measured value', n: 'Total number of runs'},
   reporting: {par: 'Variable input criteria', parHint: 'not needed: the existing design is calculated once (Run 0)', out: 'Results to report', outHint: 'everything to read from the existing design', add: '+ Add result', n: ''},
 };
 function renderAll() {
   if (!S) return;
-  $('#modeTabs').innerHTML = Object.entries(MODES).map(([k, m]) => `<button data-m="${k}" class="${S.mode === k ? 'on' : ''}">${esc(m.title)}</button>`).join('') +
-    `<span class="hint">${esc((MODES[S.mode] || {}).hint || '')}</span>`;
-  $$('#modeTabs button').forEach(b => b.onclick = () => setMode(b.dataset.m));
+  renderStudyView(); renderLink();
   const t = TXT[S.mode];
   $('#parTitle').textContent = t.par; $('#parHint').textContent = t.parHint;
   $('#outTitle').textContent = t.out; $('#outHint').textContent = t.outHint; $('#addOut').textContent = t.add;
   renderParams(); renderOuts(); renderRunSet(); renderScreen(); vPaint(); renderVisPrefs(); renderFeat();
+  const dc = S.mode === 'design_change';
+  $('#schedTitle').textContent = dc ? 'Scheduled modifications' : 'Scheduled runs';
+  $('#schedHint').textContent = dc ? 'one modification = one package of changes = one PLAXIS run · give each a name' : 'edit a value to change a run';
 }
 const domOpts = (doms, cur) => Object.entries(doms).map(([k, l]) => `<option value="${k}"${k === cur ? ' selected' : ''}>${esc(l)}</option>`).join('');
 const usedDomains = () => { const d = {}; (CAT ? CAT.params : []).forEach(p => d[p.domain] = 1); return Object.fromEntries(Object.entries(CAT.domains).filter(([k]) => d[k])); };
@@ -1276,11 +1371,7 @@ function evenVals(p, c, n) {
 function paramBody(p, c, i) {
   const u = `<span class="u">${esc(unitTxt(c.unit).trim())}</span>`;
   const isVals = !!c.values;
-  if (S.mode === 'design_change') {
-    const inp = isVals ? `<select class="pnew"><option value="">choose…</option>${c.values.map(v => `<option${String(p.new).split(':')[0].trim() === v.split(':')[0].trim() ? ' selected' : ''}>${esc(v)}</option>`).join('')}</select>`
-                       : `<input class="pnew" type="number" step="any" value="${esc(p.new ?? '')}" placeholder="new value">`;
-    return `<span class="u">existing <b>${esc(isVals ? c.current : fmtNum(c.current))}</b>${esc(unitTxt(c.unit))}</span><span>→</span>${inp}${isVals ? '' : u}`;
-  }
+  if (S.mode === 'design_change') return dcBody(p, c);  // Rev B W1.3: one or more new values (one Puzzle box each)
   if (S.distribution === 'custom') {
     const n = nBoxes(i);
     const boxes = Array.from({length: n}, (_, k) => {
@@ -1571,7 +1662,7 @@ function addParam(key, edited) {
   if (i < 0) { p = newParam(c); S.params.push(p); i = S.params.length - 1; } else p = S.params[i];
   if (edited !== undefined && edited !== null && edited !== '' && isFinite(+edited)) {
     const v = +edited;
-    if (S.mode === 'design_change') p.new = v;
+    if (S.mode === 'design_change') { const L = dcVals(p).filter(x => x !== '' && x != null); dcSet(p, L.length ? L.concat([v]) : [v]); }
     else if (S.distribution === 'custom') { p.custom = p.custom || []; p.custom[Math.max(0, p.custom.findIndex(x => x === '' || x == null) === -1 ? p.custom.length : p.custom.findIndex(x => x === '' || x == null))] = v; }
     else { const cur = +c.current; p.min = r6(Math.min(cur, v)); p.max = r6(Math.max(cur, v)); if (p.min === p.max) { p.min = r6(v - 1); p.max = r6(v + 1); } }
   }
@@ -1878,10 +1969,12 @@ function renderRunSet() {
   if (scr) { $('#nWrap').classList.add('hidden'); $('#distWrap').classList.add('hidden'); $('#baseWrap').classList.add('hidden');
     $('#runHint').textContent = `Sensitivity Detector: Run 0 + one run per ticked item (${(S.screen.items || []).length})`; return; }
   $('#nWrap').classList.toggle('hidden', dc); $('#distWrap').classList.toggle('hidden', dc); $('#baseWrap').classList.toggle('hidden', dc);
+  $('#rankWrap').classList.add('hidden'); $('#nRuns').max = 200;
   $('#factWrap').classList.toggle('hidden', S.mode !== 'combinations'); $('#factorial').checked = !!S.factorial;
   renderTime();
   $('#nLabel').textContent = TXT[S.mode].n; $('#nRuns').value = S.runs; $('#baseline').checked = !!S.baseline;
   $$('#dist button').forEach(b => b.classList.toggle('on', b.dataset.v === S.distribution));
+  if (S.mode === 'design_change') { $('#nRuns').disabled = false; return dcRunSet(); }
   const pzOn = !!(S.puzzle && S.puzzle.on) && !dc; $('#nRuns').disabled = false; $$('#dist button').forEach(b => b.disabled = pzOn);
   if (pzOn) { $('#runHint').textContent = 'the run boxes of Match the puzzle (Scheduled runs)'; $('#nNote').textContent = 'Type the number of runs: Scheduled runs shows that many run boxes to fill with the puzzle (Match similar fills them from Run 1).'; return; }
   $('#nNote').textContent = allLists() && !dc ? 'With the proposed values given one by one, a new number adds values (same step) or removes the last ones.' : '';
@@ -1901,7 +1994,12 @@ function fitLists(n) {  // the number of runs typed in the box, with value lists
   } else { const m = Math.max(1, n - base); Ls.forEach(L => { while (L.length < m) grow(L); L.length = m; }); }
   ps.forEach((p, i) => { p.list = Ls[i].map(x => fmtNum(r6(x))).join(', '); p.min = r6(Math.min(...Ls[i])); p.max = r6(Math.max(...Ls[i])); });
 }
-$('#nRuns').onchange = () => { S.runs = Math.max(1, Math.min(200, Math.round(+$('#nRuns').value || 1))); $('#nRuns').value = S.runs;
+$('#nRuns').onchange = () => {
+  if (S.mode === 'design_change') {  // Rev B W1.3: Number of modifications, 1 to 20
+    const n = Math.max(1, Math.min(20, Math.round(+$('#nRuns').value || 1))); S.mods = n; $('#nRuns').value = n;
+    if (S.puzzle && S.puzzle.on) { const q = pz(); q.slots = n; q.runs = (q.runs || []).slice(0, n); pzSync(); return; }
+    renderRunSet(); save(); return; }
+  S.runs = Math.max(1, Math.min(200, Math.round(+$('#nRuns').value || 1))); $('#nRuns').value = S.runs;
   if (S.puzzle && S.puzzle.on && S.mode !== 'design_change') { const q = pz(); q.slots = Math.max(1, S.runs - (S.baseline ? 1 : 0));
     if (q.similar) pzSimilar(); else q.runs = (q.runs || []).slice(0, q.slots); pzSync(); return; }
   if (allLists()) { fitLists(S.runs); renderParams(); } else if (S.distribution === 'custom') renderParams(); save(); };
@@ -2124,7 +2222,8 @@ function renderSched() {
       (basicDone() ? '<span class="meta"><b>Original File</b> · already calculated in the full PLAXIS run: not run again</span>' : '<span class="meta">Existing design (Original File)</span>');
     const vals = ins.map(([n, x]) => valInput(varOf(n), x)).join('');
     const ck = chkList(r);
-    return `<tr data-run="${r.run}" class="${RVRUN === r.run ? 'on' : ''}${over[key] ? ' cu' : ''}${(r.checks || []).some(c => c.level === 'error') ? ' bad' : ''}"><td class="no">Run ${r.run}</td><td>${vars}${runArea(ins)}${ck}</td><td>${vals}${over[key] ? '<button class="small ghost cre" title="Back to the proposed value">↺</button>' : ''}</td>
+    const dcm = S.mode === 'design_change' && ins.length;
+    return `<tr data-run="${r.run}" class="${RVRUN === r.run ? 'on' : ''}${over[key] ? ' cu' : ''}${(r.checks || []).some(c => c.level === 'error') ? ' bad' : ''}"><td class="no">${dcm ? `Modification ${r.run}${dcName(r)}` : `Run ${r.run}`}</td><td>${vars}${runArea(ins)}${ck}</td><td>${vals}${over[key] ? '<button class="small ghost cre" title="Back to the proposed value">↺</button>' : ''}</td>
       <td><input type="checkbox" class="rk" title="Confirm this run"${conf.has(key) ? ' checked' : ''}></td><td>${ins.length ? '<button class="small del rdel" title="Delete this run">🗑</button>' : ''}</td></tr>`; }).join('') ||
     `<tr><td colspan="5" class="meta">No runs yet.</td></tr>`;
   if (allLists() && PREV.total && !(S.puzzle && S.puzzle.on) && S.runs !== PREV.total && !PREV.deleted) { S.runs = PREV.total; $('#nRuns').value = S.runs; }
@@ -2140,10 +2239,10 @@ function renderSched() {
   $('#btnRun').textContent = `▶ Run ${nCalc} PLAXIS calculation${nCalc === 1 ? '' : 's'}`;
   $('#runMeta').textContent = errs.length ? '' : `${reuse0 ? `${PREV.total} runs: Run 0 = Original File (already calculated) + ${nCalc} new. ` : ''}Results come as figures, an Excel workbook and a Word report.`;
   // Match the puzzle: the runs are the ones put together above, nothing proposed here
-  const pzOn = !!(S.puzzle && S.puzzle.on) && S.mode !== 'design_change';
+  const pzOn = !!(S.puzzle && S.puzzle.on);
   const filled = pzOn ? (S.puzzle.runs || []).filter(x => (x || []).length).length : 0;
   $('#schedWrap .tblWrap').classList.toggle('hidden', pzOn); $('#sPrev').parentElement.classList.toggle('hidden', pzOn);
-  if (pzOn && !filled) { $('#errs').innerHTML = '<div class="pzGo">🧩 Match your Puzzle for the First Run!</div>' + (S.params.length > 1 ? '<div class="pzSub">More than one variable input: OPTIMUS does not propose the runs. Drag one box of each item into Run 1, then the next runs (or tick Match similar for other runs).</div>' : ''); $('#btnRun').disabled = true; $('#btnRun').textContent = '▶ Run PLAXIS calculations'; $('#runMeta').textContent = ''; }
+  if (pzOn && !filled) { $('#errs').innerHTML = (S.mode === 'design_change' ? '<div class="pzGo">🧩 Match your Puzzle for Modification 1!</div>' : '<div class="pzGo">🧩 Match your Puzzle for the First Run!</div>') + (S.params.length > 1 ? '<div class="pzSub">More than one variable input: OPTIMUS does not propose the runs. Drag one box of each item into Run 1, then the next runs (or tick Match similar for other runs).</div>' : ''); $('#btnRun').disabled = true; $('#btnRun').textContent = '▶ Run PLAXIS calculations'; $('#runMeta').textContent = ''; }
 }
 /* "Line 2, Line 6, … (similar) length" for a group; the parameter's name otherwise */
 function schedName(v) {
@@ -2235,8 +2334,10 @@ function renderResults() {
   else if (r.optimization) { const o = r.optimization, txt = (r.text || '').replace(/^\s*Optimization (not )?achieved[.:]\s*/i, '').replace(/^./, c => c.toUpperCase());
     b = o.achieved ? `<div class="banner good">${gauge(100)}<div><div class="big">OPTIMIZATION ACHIEVED</div></div><span class="txt">${esc(txt)}</span></div>`
                    : `<div class="banner part">${gauge(o.percent)}<div><div class="big">NOT ACHIEVED</div><div>${fmtNum(o.percent)} % of the targets reached</div></div><span class="txt">${esc(txt)}</span></div>`; }
+  else if ((r.modifications || []).filter(c => c.results).length > 1 && r.verdict && r.verdict.passing != null) { const v = r.verdict, crit = (r.modifications || []).some(c => c.meets != null);
+    b = `<div class="banner ${!crit || v.passing ? 'good' : 'part'}">${gauge(v.calculated ? v.passing / v.calculated * 100 : 0)}<div><div class="big">${crit ? `${v.passing} OF ${v.calculated} MODIFICATIONS PASS` : `${v.calculated} MODIFICATIONS COMPARED`}</div><div>★ ${esc(v.chosen_title || '')}</div></div><span class="txt">${esc(r.text || '')}</span></div>`; }
   else b = `<div class="banner info">${r.status === 'succeeded' ? pbar(100, r.total > 1 ? `Runs completed (${r.done} of ${r.total})` : 'Run completed') : ''}<span class="txt">${esc(r.text || '')}</span></div>`;
-  $('#banner').innerHTML = b;
+  $('#banner').innerHTML = b + (running ? '' : modTable(r));
   const others = r.rows.filter(x => x.run > (r.rows[0] || {}).run);
   if (r.rows.length > 1) $('#banner').insertAdjacentHTML('beforeend', `<div class="rerun"><span class="meta">${running ? 'Stops after the run in progress, then' : ''}</span>
       <button class="small" id="btnFrom">↻ Re-run from</button><select id="selFrom">${r.rows.map(x => `<option value="${x.run}"${x.run === (r.rows.find(y => y.status !== 'succeeded') || others[0] || r.rows[0]).run ? ' selected' : ''}>Run ${x.run}</option>`).join('')}</select>
@@ -2268,7 +2369,7 @@ function renderResults() {
   };
   try { renderProposals(); } catch (e) { console.error('proposals', e); }
   $('#figs').innerHTML = (r.figures || []).map(f => `<figure><img src="${f.src}" alt="${esc(f.title)}"><figcaption>${esc(f.title)}</figcaption></figure>`).join('');
-  for (const f of [renderResView, renderDyn, renderReport]) { try { f(); } catch (e) { console.error(f.name, e); } }
+  for (const f of [renderResView, renderDyn, renderReport, renderNext]) { try { f(); } catch (e) { console.error(f.name, e); } }
 }
 
 const failHtml = x => x.status !== 'failed' ? '' : `<div class="fail"><div><b>Failure reason:</b> ${esc(x.reason || x.error || 'not given by PLAXIS')}</div><div class="sol"><b>Proposed solution:</b> ${esc(x.solution || 'Press Restart: only the failed runs are calculated again.')}</div></div>`;
@@ -3618,6 +3719,7 @@ const pzGroup = p => p.item.startsWith('grp:') && S.geo.find(e => 'grp:' + e.id 
 function pzName(p, short) { const c = PMAP[p.item], g = pzGroup(p), ar = pzArea(p); if (ar) return `${ar.ld.name} ${ldWord(ar.ld)}` + (short ? '' : ` (${editKey(p.item, ar.ld)})`); return g ? (short ? g.label : `${g.label} ${modeText(g)}`) : c.label; }
 function pzTiles(p, i) {
   const c = PMAP[p.item]; if (!c) return [];
+  if (S.mode === 'design_change') return dcVals(p).filter(v => v !== '' && v != null).map(v => c.values ? (c.values.find(o => o.split(':')[0].trim() === String(v).split(':')[0].trim()) || String(v)) : +v);
   if (c.values) { const sel = (p.values || []).filter(x => c.values.includes(x)); return sel.length ? sel : [...c.values]; }
   if (p.how === 'list') return parseList(p.list);
   return evenVals(p, c, Math.max(3, nVar())).map(v => +(+v).toPrecision(3));  // about one box per run, round values; ＋ / × make it flexible
@@ -3635,7 +3737,7 @@ function renderPuzzle() {
           : c.values ? ` ${esc(pzVal(c, v))}` : `<input class="pzV" data-i="${i}" data-k="${k}" type="number" step="any" value="${esc(fmtNum(+v))}"><span>${esc(unitTxt(c.unit).trim())}</span>`}
         <button class="pzX" data-i="${i}" data-k="${k}" title="Remove this value">×</button></span>`).join('');
     return `<div class="pzRow"><span class="pzN">${esc(pzName(p))}</span><div class="pzTiles">${tiles}<button class="small pzAdd" data-i="${i}" title="Add a value">＋</button></div></div>`; }).join('')).join('');
-  const html = `<div class="pzHead"><b>🧩 Puzzle</b><span class="meta">one box per decided value; edit, ＋ add, × remove. ${S.puzzle && S.puzzle.on ? 'Drag the boxes into the runs just below (or click a box, then click a run).' : 'Then tick <b>Match the puzzle</b> under Scheduled runs and drag the boxes into the runs (or click a box, then click a run).'}</span></div>` +
+  const html = `<div class="pzHead"><b>🧩 Puzzle</b><span class="meta">one box per decided value; edit, ＋ add, × remove. ${S.puzzle && S.puzzle.on ? (S.mode === 'design_change' ? 'Drag the boxes into the modifications just below; several boxes make one package (or click a box, then click a modification).' : 'Drag the boxes into the runs just below (or click a box, then click a run).') : 'Then tick <b>Match the puzzle</b> under Scheduled runs and drag the boxes into the runs (or click a box, then click a run).'}</span></div>` +
     (rows || '<p class="meta">Add variables first: their values appear here as boxes.</p>');
   if (!el.classList.contains('hidden')) el.innerHTML = html;
   if (el2) el2.innerHTML = html;
@@ -3655,6 +3757,7 @@ document.addEventListener('click', e => { const b = e.target.closest('button.clr
 });
 function pzOnBoth(type, f) { $('#pzPanel').addEventListener(type, f); $('#pzLeft').addEventListener(type, f); }
 function pzSet(p, i, vals) {  // the boxes of a number parameter are its list of values
+  if (S.mode === 'design_change') { dcSet(p, vals.map(v => r6(v))); return; }
   if (p.frozen) { pickMsg(`<b>${esc(pzName(p))}</b> is frozen: untick 🔒 Freeze the values to change it.`, true); return; }
   const before = S.params.map(listLen); p.how = 'list'; p.list = vals.map(v => fmtNum(r6(v))).join(', ');
   if (vals.length) { p.min = r6(Math.min(...vals)); p.max = r6(Math.max(...vals)); }
@@ -3668,7 +3771,7 @@ pzOnBoth('click', e => {
   const x = e.target.closest('.pzX'), a = e.target.closest('.pzAdd');
   if (x || a) { const i = +(x || a).dataset.i, p = S.params[i], c = PMAP[p.item], vals = pzTiles(p, i);
     if (c.values) { let sel = [...vals]; if (x) sel.splice(+x.dataset.k, 1); else { const m = c.values.find(v => !sel.includes(v)); if (m) sel.push(m); }
-      p.values = c.values.filter(v => sel.includes(v)); }
+      if (S.mode === 'design_change') dcSet(p, sel); else p.values = c.values.filter(v => sel.includes(v)); }
     else { const nv = vals.map(Number); if (x) nv.splice(+x.dataset.k, 1); else { const l = nv[nv.length - 1], d = nv.length > 1 ? l - nv[nv.length - 2] : (Math.abs(l) * .1 || 1); nv.push(r6(l + d)); } pzSet(p, i, nv); }
     renderParams(); save(); return; }
   const t = e.target.closest('.pzT'); if (!t || e.target.closest('input')) return;
@@ -3679,12 +3782,12 @@ pzOnBoth('click', e => {
 pzOnBoth('dragstart', e => { const t = e.target.closest && e.target.closest('.pzT'); if (!t) return;
   const p = S.params[+t.dataset.i]; e.dataTransfer.setData('text/plain', JSON.stringify({item: p.item, v: PMAP[p.item].values ? t.dataset.v : +t.dataset.v})); e.dataTransfer.effectAllowed = 'copy'; });
 function renderPzRuns() {
-  if (!S) return; const dc = S.mode === 'design_change', on = !!(S.puzzle && S.puzzle.on) && !dc;
-  $('.pzBar').classList.toggle('hidden', dc); $('#pzOn').checked = on; $('#pzSim').checked = !!(S.puzzle && S.puzzle.similar); $('#pzSim').disabled = !on;
+  if (!S) return; const dc = S.mode === 'design_change', on = !!(S.puzzle && S.puzzle.on);
+  $('.pzBar').classList.toggle('hidden', S.mode === 'reporting'); $('#pzOn').checked = on; $('#pzSim').checked = !!(S.puzzle && S.puzzle.similar); $('#pzSim').disabled = !on;
   $('#pzRuns').classList.toggle('hidden', !on);
   if (on && !$('#pzPanel2')) { $('#pzLeft').innerHTML = '<div class="pzPanel" id="pzPanel2"></div>'; $('#pzPanel').classList.remove('hidden'); renderPuzzle(); }
   if (!on && $('#pzPanel2')) $('#pzLeft').innerHTML = '';
-  $('#pzHint').textContent = on ? (PZSEL ? 'Now click the run to put the selected box in.' : 'Drag the puzzle boxes (🧩 Puzzle) into the runs.') : '';
+  $('#pzHint').textContent = on ? (PZSEL ? `Now click the ${dc ? 'modification' : 'run'} to put the selected box in.` : `Drag the puzzle boxes (🧩 Puzzle) into the ${dc ? 'modifications: several boxes make one package' : 'runs'}.`) : '';
   if (!on) return;
   const R = pz().runs, doms = (CAT && CAT.domains) || {}, n = Math.max(pz().slots || 0, R.length + (pz().slots && R.length >= pz().slots ? 0 : 1), 1);
   $('#pzRuns').innerHTML = Array.from({length: n}, (_, k) => { const cell = R[k] || [];
@@ -3692,11 +3795,12 @@ function renderPzRuns() {
       const ar = pzArea(p), mine = ar ? cell.filter(x => ldOf(x.item).some(y => y.ld.name === ar.ld.name)) : [];
       const val = ar ? `${ldSizeTxt(ar.ld, ldShape(ar.ld, mine))} (${editTxt(t.item, t.v, ar.ld)})` : pzVal(c, t.v);
       return `<span class="pzT"><i>(${esc(pzKeyLab(pzKey(p)))})</i><b>${esc(pzName(p, true))}:</b> ${esc(val)}<button class="pzRX" data-r="${k}" data-j="${j}" title="Take it out">×</button></span>`; }).join('');
-    return `<div class="pzRun${PZSEL ? ' ready' : ''}" data-r="${k}"><b>Run ${k + 1}:</b>${tiles || '<span class="meta">drop boxes here</span>'}</div>`; }).join('');
+    return `<div class="pzRun${PZSEL ? ' ready' : ''}" data-r="${k}"><b>${dc ? `Modification ${k + 1}` : `Run ${k + 1}`}:</b>${tiles || '<span class="meta">drop boxes here</span>'}</div>`; }).join('');
 }
 function pzSync() {
   const R = pz().runs; while (R.length && !(R[R.length - 1] || []).length) R.pop();
-  if (S.puzzle.on) { S.runs = Math.max(1, Math.min(200, (S.baseline ? 1 : 0) + Math.max(pz().slots || 0, R.filter(x => (x || []).length).length))); renderRunSet(); }
+  if (S.puzzle.on && S.mode === 'design_change') { S.mods = Math.max(1, Math.min(20, Math.max(pz().slots || 0, R.filter(x => (x || []).length).length))); renderRunSet(); }
+  else if (S.puzzle.on) { S.runs = Math.max(1, Math.min(200, (S.baseline ? 1 : 0) + Math.max(pz().slots || 0, R.filter(x => (x || []).length).length))); renderRunSet(); }
   renderPzRuns(); save();
 }
 function pzPut(k, t) {
@@ -3719,7 +3823,9 @@ function pzAuto() {  // more than one variable input: the runs are not proposed,
     $('#pzPanel').classList.remove('hidden'); renderParams(); renderPuzzle(); pzSync(); }
   else if (!multi) { q.off = false; if (q.auto && q.on && !(q.runs || []).some(x => (x || []).length)) { q.on = false; q.auto = false; renderPzRuns(); renderRunSet(); } }
 }
-$('#pzOn').onchange = () => { pz().on = $('#pzOn').checked; S.puzzle.auto = false; S.puzzle.off = !S.puzzle.on && S.params.length > 1; if (S.puzzle.on) {
+$('#pzOn').onchange = () => { pz().on = $('#pzOn').checked; S.puzzle.auto = false; S.puzzle.off = !S.puzzle.on && S.params.length > 1;
+  if (S.mode === 'design_change') { if (S.puzzle.on) { pz().slots = pz().slots || dcMods(); $('#pzPanel').classList.remove('hidden'); } renderParams(); pzSync(); renderRunSet(); return; }
+  if (S.puzzle.on) {
     S.params.forEach((p, i) => { const c = PMAP[p.item]; if (c && !c.values && p.how !== 'list') pzSet(p, i, pzTiles(p, i).map(Number)); });  // the boxes stay as they are
     $('#pzPanel').classList.remove('hidden'); }
   else if (S.mode !== 'design_change') {  // back to the lists / ranges: the total follows them again
@@ -3784,6 +3890,276 @@ function renderResView() {
   $('#oneNext').onclick = () => { RESRUN = r.rows[idx + 1].run; renderResView(); };
   $('#oneShow').onclick = () => { VZ.show = null; runOverlay(x.moves || {}); $('#view').scrollIntoView({behavior: 'smooth', block: 'center'}); };
 }
+
+/* ============ Rev B (Walid, 23-24 Nov 2026): Study plan, the module boxes, What next?, many modifications ============ */
+let PLAN = null, PLANINFO = null, PLANVIEW = false, PREFILL = {}, NEXT = null, NEXT_HIDE = {};
+const CHAIN_A = ['sensitivity', 'optimize', 'design_change', 'combinations'], CHAIN_B = ['calibration', 'design_change', 'combinations'];
+const PLAN_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="3.5" width="14" height="18" rx="2"/><path d="M9 3.5h6v3H9z"/><path d="M8.5 11h7M8.5 14.5h7M8.5 18h4"/></svg>';
+const SHORT = {sensitivity: 'Sensitivity', optimize: 'Optimization', design_change: 'Modification', combinations: 'Scenarios', calibration: 'Calibration', reporting: 'Report'};
+let ARROW_N = 0;
+function arrowSvg() {
+  const id = 'ag' + (++ARROW_N);
+  return `<svg viewBox="0 0 50 24" aria-hidden="true"><defs><linearGradient id="${id}" x1="0" x2="1"><stop offset="0" stop-color="#f6e3b8" stop-opacity=".5"/><stop offset="1" stop-color="#f0c470"/></linearGradient></defs>
+    <path d="M3 13 C 15 4, 30 4, 43.5 12.5" stroke="url(#${id})"/><path class="head" d="M36.5 7.2 L44.2 12.6 L36 16.8" stroke="#f0c470"/></svg>`;
+}
+const takesOf = (a, b) => ((PLANINFO || {}).takes || {})[`${a}>${b}`] || (b === 'reporting' ? 'the design to report' : 'nothing is calculated until you press Run: the next module opens pre-filled');
+async function loadPlan() {
+  PLAN = {several: false, steps: [], next: {}}; PLANINFO = null; PREFILL = {};
+  if (!P) return;
+  try { const r = await api(`/api/projects/${P.id}/plan`); PLAN = r.plan; PLANINFO = r; } catch (e) { console.error('plan', e); }
+  PREFILL = {...((P.setup || {}).prefill || {})};
+}
+async function savePlan() {
+  if (!P) return;
+  try { const r = await put(`/api/projects/${P.id}/plan`, PLAN); PLAN = r.plan; DIRTY = true; renderFileBar(); } catch (e) { toast(e.message); }
+  renderStrip(); if (PLANVIEW) renderPlanPage();
+}
+function lastStudy(m) { const mine = STUDIES.filter(x => x.kind === m); return mine.length ? mine[mine.length - 1] : null; }
+function modeState(m) {
+  const x = lastStudy(m), nt = (NEWTXT[m] || ['Study'])[0];
+  if (PREFILL[m]) return '<span class="run">pre-filled · opens with the handover</span>';
+  if (!x) return 'not started';
+  const nn = String(x.n).padStart(2, '0');
+  if (['queued', 'running'].includes(x.status)) return `<span class="run">● study ${nn} running</span>`;
+  if (x.status === 'succeeded') return `<span class="ok">✓</span> study ${nn} done`;
+  return `${esc(nt)} ${nn} · ${esc(x.status)}`;
+}
+function stripOrder() {
+  const keys = Object.keys(MODES || {}), pl = PLAN || {};
+  if (pl.several && (pl.steps || []).length) { const flow = [...new Set(pl.steps)].filter(m => keys.includes(m)); return {flow, rest: keys.filter(m => !flow.includes(m)), plan: true}; }
+  return {flow: CHAIN_A.filter(m => keys.includes(m)), rest: keys.filter(m => !CHAIN_A.includes(m)), plan: false};
+}
+function mBox(m, extra) {
+  const on = !PLANVIEW && S && S.mode === m, st = extra && extra.step;
+  const done = st && (lastStudy(m) || {}).status === 'succeeded';
+  return `<button class="mbox${on ? ' on' : ''}" data-m="${m}" title="${esc((MODES[m] || {}).hint || '')}">${st ? `<span class="step${done ? ' done' : ''}">${done ? '✓' : st}</span>` : ''}${ICONS[m] || ''}
+    <b>${esc((MODES[m] || {}).title || m)}</b><span class="ms">${extra && extra.sub ? extra.sub : modeState(m)}</span></button>`;
+}
+function arrowHtml(a, b, label, soft) {
+  return `<span class="marrow${soft ? ' soft' : ''}" title="${esc(`${(MODES[a] || {}).title} → ${(MODES[b] || {}).title}: ${takesOf(a, b)}`)}">${arrowSvg()}${label ? `<span class="ch">${esc(label)}</span>` : ''}</span>`;
+}
+function renderStrip() {
+  const el = $('#modeTabs'); if (!el || !S) return;
+  const o = stripOrder(), pl = PLAN || {};
+  const nPl = (pl.steps || []).length;
+  let h = `<button class="mbox plan${PLANVIEW ? ' on' : ''}" data-plan="1" title="The first page of the study page: one module, or several in your own order">${PLAN_ICON}<b>Study plan</b>
+    <span class="ms">${pl.several && nPl ? `${nPl} module${nPl > 1 ? 's' : ''} in my order` : 'one or several modules'}</span></button><span class="msep"></span>`;
+  h += o.flow.map((m, i) => (i ? arrowHtml(o.flow[i - 1], m, o.plan ? '' : 'A') : '') + mBox(m, o.plan ? {step: (pl.steps || []).indexOf(m) + 1} : null)).join('');
+  if (o.rest.length) h += '<span class="msep"></span>' + o.rest.map(m => mBox(m, !o.plan && m === 'calibration' ? {sub: `${modeState(m)} · <b>B</b> → Modification`} :
+    !o.plan && m === 'reporting' ? {sub: `${modeState(m)} · any design, any time`} : null)).join('');
+  el.innerHTML = h;
+  const hint = $('#modeHint');
+  if (hint) hint.innerHTML = PLANVIEW ? 'The Study plan: run one module, or several modules in your own order. OPTIMUS always asks <b>What next?</b> at the end of each module.'
+    : esc((MODES[S.mode] || {}).hint || '') + (o.plan ? '' : ` <span style="opacity:.85">· chain <b>A</b>: ${esc((PLANINFO || {chain_text: {}}).chain_text.A || 'Sensitivity → Optimization → Modification → Scenarios')} · chain <b>B</b>: ${esc((PLANINFO || {chain_text: {}}).chain_text.B || 'Back-analysis → Modification → Scenarios')}</span>`);
+}
+$('#modeTabs').addEventListener('click', e => {
+  const b = e.target.closest('.mbox'); if (!b || !S) return;
+  if (b.dataset.plan) { PLANVIEW = true; renderStudyView(); window.scrollTo({top: 0, behavior: 'smooth'}); return; }
+  const m = b.dataset.m; if (!m) return;
+  if (m !== S.mode || PREFILL[m]) setMode(m); else { PLANVIEW = false; renderStudyView(); }
+});
+function renderStudyView() {
+  $('#study').classList.toggle('planview', PLANVIEW); $('#planPage').classList.toggle('hidden', !PLANVIEW);
+  renderStrip(); if (PLANVIEW) renderPlanPage();
+  if (!PLANVIEW) requestAnimationFrame(() => { try { vSize(); } catch (e) {} });
+}
+/* ---- the Study plan page (first page of the study page) ---- */
+let PL_DRAG = null;
+function planState(i) {
+  const pl = PLAN, m = pl.steps[i], x = lastStudy(m);
+  if (x && x.status === 'succeeded') return `<span class="ok">✓ done</span> · ${esc((NEWTXT[m] || ['Study'])[0])} ${String(x.n).padStart(2, '0')}`;
+  if (x && ['queued', 'running'].includes(x.status)) return '<span class="run">running</span>';
+  const first = pl.steps.findIndex(mm => ((lastStudy(mm) || {}).status !== 'succeeded'));
+  return i === first ? '<b>open now</b>' : `waits for ${first + 1}`;
+}
+function renderPlanPage() {
+  const pl = PLAN || {several: false, steps: [], next: {}}, several = !!pl.several, keys = Object.keys(MODES || {});
+  const ct = (PLANINFO || {}).chain_text || {A: 'Sensitivity → Optimization → Modification → Scenarios', B: 'Back-analysis → Modification → Scenarios'};
+  const flow = (list, drag) => `<div class="plFlow">${list.map((m, i) => (i ? arrowHtml(list[i - 1], m) : '') +
+    mBox(m, {step: i + 1, sub: drag ? planState(i) : modeState(m)}).replace('<button class="mbox', `<button${drag ? ` draggable="true" data-k="${i}"` : ''} class="mbox`)).join('')}</div>`;
+  let body;
+  if (!several) {
+    body = `<p>Click a module box above to run one module, as before. The modules link in two chains; at the end of each module OPTIMUS proposes the next one.</p>
+      <div class="meta" style="margin:.2rem 0 .1rem">Chain A · forward design</div>${flow(CHAIN_A.filter(m => keys.includes(m)))}
+      <div class="meta" style="margin:.2rem 0 .1rem">Chain B · from the site back to the design</div>${flow(CHAIN_B.filter(m => keys.includes(m)))}
+      <p class="meta">Advanced reporting stays outside the chains: it reports the existing design, or any chosen run, from any module.</p>`;
+  } else {
+    const n = pl.steps.length, first = pl.steps.findIndex(m => (lastStudy(m) || {}).status !== 'succeeded');
+    body = `<div class="plChains"><span class="meta">Start from a chain:</span><button class="small" data-chain="A">A · ${esc(ct.A)}</button><button class="small" data-chain="B">B · ${esc(ct.B)}</button><button class="small ghost" data-chain="">Empty plan</button></div>
+      ${n ? flow(pl.steps, true) : '<p class="meta">Empty plan: add the modules below, in your order.</p>'}
+      <div class="tblWrap"><table class="plTbl"><thead><tr><th></th><th>#</th><th>Module</th><th>Takes from the step before</th><th>State</th><th></th></tr></thead><tbody>${pl.steps.map((m, i) =>
+        `<tr draggable="true" data-k="${i}"><td class="hdl" title="Drag to change the order">≡</td><td><b>${i + 1}</b></td>
+          <td><select class="plMode" data-k="${i}">${keys.map(k => `<option value="${k}"${k === m ? ' selected' : ''}>${esc(MODES[k].title)}</option>`).join('')}</select></td>
+          <td class="meta">${i ? esc(takesOf(pl.steps[i - 1], m)) : 'the full run of the Original File (Run 0)'}</td><td>${planState(i)}</td>
+          <td style="white-space:nowrap"><button class="small ghost" data-up="${i}" title="Earlier"${i ? '' : ' disabled'}>↑</button><button class="small ghost" data-dn="${i}" title="Later"${i < n - 1 ? '' : ' disabled'}>↓</button><button class="small del" data-rm="${i}" title="Remove from the plan">×</button></td></tr>`).join('')}</tbody></table></div>
+      <div class="actions" style="margin-top:.5rem"><select id="plAdd"><option value="">＋ Add a module…</option>${keys.map(k => `<option value="${k}">${esc(MODES[k].title)}</option>`).join('')}</select>
+        <span class="meta">Calibration, Advanced reporting, or a second study of the same module</span><span class="sp"></span>
+        ${first >= 0 ? `<button class="primary" id="plGo">▶ Continue with ${first + 1} · ${esc(MODES[pl.steps[first]].title)}</button>` : n ? '<span class="pill">✓ every step done</span>' : ''}</div>
+      <p class="meta">The plan can be changed at any time; a module already run keeps its results. An answer to What next? that changes the order updates this table.</p>`;
+  }
+  $('#planPage').innerHTML = `<section class="card"><h2><span class="n">0</span>Study plan<span class="hint">Do you prefer to run several modules? · the first page of the study page · saved with the project</span></h2><div class="body">
+    <div class="plq"><button data-pl="one" class="${several ? '' : 'on'}"><b>One module</b><span>click a module box above, as before</span></button>
+      <button data-pl="several" class="${several ? 'on' : ''}"><b>Several modules, in my order</b><span>build the plan; each module hands its results to the next</span></button></div>
+    ${body}
+    <div class="plNote"><b>Between modules</b> · OPTIMUS always asks <b>What next?</b> at the end of each module. The answers are flexible: proceed, pre-fill only, choose another module, change the order, or not now. No plan runs on without asking.</div></div></section>`;
+}
+$('#planPage').addEventListener('click', e => {
+  const pl = PLAN; if (!pl) return;
+  const q = e.target.closest('[data-pl]');
+  if (q) { pl.several = q.dataset.pl === 'several'; if (pl.several && !pl.steps.length) { pl.steps = [...CHAIN_A]; pl.chain = 'A'; } savePlan(); return; }
+  const c = e.target.closest('[data-chain]');
+  if (c) { pl.chain = c.dataset.chain || null; pl.steps = c.dataset.chain === 'A' ? [...CHAIN_A] : c.dataset.chain === 'B' ? [...CHAIN_B] : []; pl.several = true; savePlan(); return; }
+  const up = e.target.closest('[data-up]'), dn = e.target.closest('[data-dn]'), rm = e.target.closest('[data-rm]');
+  if (up) { const i = +up.dataset.up; [pl.steps[i - 1], pl.steps[i]] = [pl.steps[i], pl.steps[i - 1]]; savePlan(); return; }
+  if (dn) { const i = +dn.dataset.dn; [pl.steps[i + 1], pl.steps[i]] = [pl.steps[i], pl.steps[i + 1]]; savePlan(); return; }
+  if (rm) { pl.steps.splice(+rm.dataset.rm, 1); if (!pl.steps.length) pl.several = false; savePlan(); return; }
+  if (e.target.closest('#plGo')) { const i = pl.steps.findIndex(m => (lastStudy(m) || {}).status !== 'succeeded'); if (i >= 0) setMode(pl.steps[i]); return; }
+  const b = e.target.closest('.plFlow .mbox'); if (b && !pl.several) setMode(b.dataset.m);
+});
+$('#planPage').addEventListener('change', e => {
+  const pl = PLAN; if (!pl) return;
+  if (e.target.id === 'plAdd' && e.target.value) { pl.steps.push(e.target.value); pl.several = true; savePlan(); return; }
+  if (e.target.classList.contains('plMode')) { pl.steps[+e.target.dataset.k] = e.target.value; savePlan(); }
+});
+/* drag ≡ (or a box of the plan) to change the order */
+$('#planPage').addEventListener('dragstart', e => { const t = e.target.closest('[data-k][draggable]'); if (!t) return; PL_DRAG = +t.dataset.k; e.dataTransfer.effectAllowed = 'move'; try { e.dataTransfer.setData('text/plain', 'plan'); } catch (err) {} t.classList.add('drag'); });
+$('#planPage').addEventListener('dragover', e => { const t = e.target.closest('[data-k][draggable]'); if (t && PL_DRAG !== null) { e.preventDefault(); $$('#planPage .over').forEach(x => x.classList.remove('over')); t.classList.add('over'); } });
+$('#planPage').addEventListener('drop', e => { const t = e.target.closest('[data-k][draggable]'); if (!t || PL_DRAG === null) return; e.preventDefault();
+  const to = +t.dataset.k, st = PLAN.steps, [m] = st.splice(PL_DRAG, 1); st.splice(to, 0, m); PL_DRAG = null; savePlan(); });
+$('#planPage').addEventListener('dragend', () => { PL_DRAG = null; $$('#planPage .over, #planPage .drag').forEach(x => x.classList.remove('over', 'drag')); });
+
+/* ---- the linked input: where a pre-filled study came from (Unlink makes them ordinary inputs) ---- */
+function renderLink() {
+  const el = $('#linkBox'); if (!el) return;
+  const l = S && S.link;
+  if (!l || !l.task) { el.innerHTML = ''; return; }
+  const src = STUDIES.find(x => x.task === l.task), nm = src ? `${(NEWTXT[src.kind] || [l.title])[0]} ${String(src.n).padStart(2, '0')}` : l.title;
+  el.innerHTML = `<div class="linkChip">🔗 <span style="flex:1;min-width:16rem">Linked input from <b>${esc(nm)}</b>${(l.taken || []).length ? ': ' + l.taken.map(esc).join(' · ') : ''}. Edit freely: nothing is calculated until you press Run.</span>
+    <button class="small" id="linkOff" title="Keep the values as ordinary inputs">Unlink</button></div>`;
+  $('#linkOff').onclick = () => { delete S.link; renderLink(); save(); toast('Unlinked: the values stay as ordinary inputs.'); };
+}
+
+/* ---- What next? at the end of every module ---- */
+async function renderNext() {
+  const card = $('#nextCard'), r = RES; if (!card) return;
+  const done = r && !['queued', 'running'].includes(r.status) && r.rows.some(x => x.status === 'succeeded');
+  if (!done || NEXT_HIDE[TASK]) { card.classList.add('hidden'); return; }
+  const key = `${TASK}|${r.status}|${JSON.stringify((PLAN || {}).next || {})}|${JSON.stringify((PLAN || {}).steps || [])}|${(r.verdict || {}).chosen}`;
+  if (!NEXT || NEXT.key !== key) {
+    try { NEXT = {key, data: await api(`/api/tasks/${TASK}/next`)}; } catch (e) { console.error('next', e); card.classList.add('hidden'); return; }
+  }
+  const w = NEXT.data; card.classList.remove('hidden');
+  const more = (w.flags || []).includes('more_runs') && ['optimize', 'calibration'].includes(r.mode);
+  const rows = w.items.map((x, i) => `<div class="nxRow${i === 0 ? ' first' : ''}" draggable="true" data-k="${i}"><span class="hdl" title="Drag to change the order">≡</span><span class="no">${i + 1 + (more ? 1 : 0)}</span>
+      <span class="tt">${ICONS[x.mode] || ''}${esc(x.title)}</span><span class="why">${esc(x.why)} <b>Takes:</b> ${esc(x.takes)}${PREFILL[x.mode] ? ' · <b>pre-filled</b>' : ''}</span>
+      <span class="act">${x.action === 'report' ? `<button class="small${i === 0 ? ' primary' : ''}" data-go="${x.mode}">Report it →</button>`
+        : `<button class="small${i === 0 ? ' primary' : ''}" data-go="${x.mode}">Proceed →</button><button class="small ghost" data-pre="${x.mode}" title="Fill the next module in without leaving this one">Pre-fill only</button>`}
+        <button class="small ghost" data-nu="${i}" title="Earlier"${i ? '' : ' disabled'}>↑</button><button class="small ghost" data-nd="${i}" title="Later"${i < w.items.length - 1 ? '' : ' disabled'}>↓</button><button class="small ghost" data-nx="${i}" title="Remove from the suggestions">×</button></span></div>`).join('');
+  $('#nextBody').innerHTML = `<div class="nxQ">${esc(w.question)}</div>
+    ${more ? `<div class="nxRow first"><span class="hdl"></span><span class="no">1</span><span class="tt">＋ Add new runs</span><span class="why">${r.mode === 'calibration' ? 'The best fit is at the end of its range: widen it before handing over.' : 'No run meets every target yet: add runs in this module first.'}</span><span class="act"><button class="small primary" id="nxMore">＋ Add new runs</button></span></div>` : ''}
+    ${rows}
+    <div class="nxFoot"><select id="nxAdd"><option value="">＋ Suggest another module…</option>${(w.others || []).map(o => `<option value="${o.mode}">${esc(o.title)}</option>`).join('')}</select>
+      ${w.custom ? '<button class="small ghost" id="nxReset">Reset to the default order</button>' : ''}<span class="sp"></span>
+      <button class="small ghost" id="nxPlan">📋 Edit the plan</button></div>`;
+}
+function nextOrder() { return ((NEXT && NEXT.data && NEXT.data.items) || []).map(x => x.mode); }
+async function setNextOrder(order) {
+  if (!PLAN || !RES) return; PLAN.next = {...(PLAN.next || {}), [RES.mode]: order};
+  await savePlan(); NEXT = null; renderNext();
+}
+async function handover(to, open) {
+  if (!TASK) return; const from = RES ? RES.mode : '';
+  try {
+    const r = await post(`/api/tasks/${TASK}/handover`, {to, save: open ? 'open' : 'prefill'});
+    if (!open) { PREFILL[to] = r.study; toast(`${MODES[to].title} is pre-filled from this study: it opens with these inputs when you click its box.`); renderStrip(); NEXT = null; renderNext(); return; }
+    delete PREFILL[to];
+    S = {...r.study, geo: r.study.geo || S.geo || []}; syncGeo(); clearResults(); PLANVIEW = false; renderAll(); renderSched(); renderStudies();
+    await saveNow(); DIRTY = true; renderFileBar();
+    toast(`${MODES[to].title} opened with the results of ${MODES[from] ? MODES[from].title : 'the study'}: check them, then press Run.`);
+    window.scrollTo({top: 0, behavior: 'smooth'});
+  } catch (e) { toast(e.message); }
+}
+$('#nextCard').addEventListener('click', e => {
+  const g = e.target.closest('[data-go]'), pf = e.target.closest('[data-pre]');
+  if (g) return g.dataset.go === 'reporting' ? handover('reporting', true) : handover(g.dataset.go, true);
+  if (pf) return handover(pf.dataset.pre, false);
+  const o = nextOrder(), u = e.target.closest('[data-nu]'), d = e.target.closest('[data-nd]'), x = e.target.closest('[data-nx]');
+  if (u) { const i = +u.dataset.nu; [o[i - 1], o[i]] = [o[i], o[i - 1]]; return setNextOrder(o); }
+  if (d) { const i = +d.dataset.nd; [o[i + 1], o[i]] = [o[i], o[i + 1]]; return setNextOrder(o); }
+  if (x) { o.splice(+x.dataset.nx, 1); return setNextOrder(o); }
+  if (e.target.closest('#nxReset')) { const nx = {...(PLAN.next || {})}; delete nx[RES.mode]; PLAN.next = nx; savePlan().then(() => { NEXT = null; renderNext(); }); return; }
+  if (e.target.closest('#nxPlan')) { PLANVIEW = true; renderStudyView(); window.scrollTo({top: 0, behavior: 'smooth'}); return; }
+  if (e.target.closest('#nxMore')) { const b = $('#btnMore'); if (b) { $('#more').scrollIntoView({behavior: 'smooth', block: 'center'}); b.click(); } }
+});
+$('#nextCard').addEventListener('change', e => { if (e.target.id === 'nxAdd' && e.target.value) { const o = nextOrder(); o.push(e.target.value); setNextOrder(o); } });
+let NX_DRAG = null;
+$('#nextCard').addEventListener('dragstart', e => { const t = e.target.closest('.nxRow[data-k]'); if (!t) return; NX_DRAG = +t.dataset.k; e.dataTransfer.effectAllowed = 'move'; try { e.dataTransfer.setData('text/plain', 'next'); } catch (err) {} });
+$('#nextCard').addEventListener('dragover', e => { const t = e.target.closest('.nxRow[data-k]'); if (t && NX_DRAG !== null) { e.preventDefault(); $$('#nextCard .over').forEach(x => x.classList.remove('over')); t.classList.add('over'); } });
+$('#nextCard').addEventListener('drop', e => { const t = e.target.closest('.nxRow[data-k]'); if (!t || NX_DRAG === null) return; e.preventDefault();
+  const o = nextOrder(), [m] = o.splice(NX_DRAG, 1); o.splice(+t.dataset.k, 0, m); NX_DRAG = null; setNextOrder(o); });
+$('#nextCard').addEventListener('dragend', () => { NX_DRAG = null; $$('#nextCard .over').forEach(x => x.classList.remove('over')); });
+$('#nextHide').onclick = () => { NEXT_HIDE[TASK] = true; $('#nextCard').classList.add('hidden'); toast('What next? closed: it comes back when you open this study again from its module box.'); };
+
+/* ---- Design modification: many modifications (W1.3), names (W1.2a), results per modification (W1.5), Choose ★ ---- */
+const dcVals = p => Array.isArray(p.news) && p.news.length ? p.news : (p.new !== undefined && p.new !== null && p.new !== '' ? [p.new] : ['']);
+function dcSet(p, vals) { p.news = vals; p.new = vals.find(v => v !== '' && v != null) ?? ''; }
+const dcLongest = () => Math.max(1, ...S.params.map(p => dcVals(p).filter(v => v !== '' && v != null).length));
+const dcMods = () => Math.max(1, Math.min(20, +S.mods || dcLongest()));
+function dcBody(p, c) {
+  const isVals = !!c.values, vals = dcVals(p);
+  const boxes = vals.map((v, k) => `<span class="dbox" title="New value ${k + 1}: one Puzzle box${S.puzzle && S.puzzle.on ? '' : `; Modification ${k + 1} takes it`}"><i>${k + 1}</i>${isVals
+      ? `<select class="dnv" data-k="${k}"><option value="">choose…</option>${c.values.map(o => `<option${String(v).split(':')[0].trim() === o.split(':')[0].trim() ? ' selected' : ''}>${esc(o)}</option>`).join('')}</select>`
+      : `<input class="dnv" data-k="${k}" type="number" step="any" value="${esc(v ?? '')}" placeholder="new value">`}${vals.length > 1 ? `<button class="dx" data-k="${k}" title="Remove this value">×</button>` : ''}</span>`).join('');
+  return `<span class="u">existing <b>${esc(isVals ? c.current : fmtNum(c.current))}</b>${esc(unitTxt(c.unit))}</span><span>→</span><span class="dvals">${boxes}<button class="small dadd" title="Add a value (one more Puzzle box)">＋ value</button></span>${isVals ? '' : `<span class="u">${esc(unitTxt(c.unit).trim())}</span>`}`;
+}
+$('#parList').addEventListener('change', e => { const el = e.target; if (!el.classList.contains('dnv')) return; const [, p] = rowOf(el); if (!p) return;
+  const v = dcVals(p).slice(); v[+el.dataset.k] = el.tagName === 'SELECT' ? el.value : (el.value === '' ? '' : +el.value); dcSet(p, v); renderPuzzle(); save(); });
+$('#parList').addEventListener('click', e => {
+  const x = e.target.closest('.dx'), a = e.target.closest('.dadd'); if (!x && !a) return; const [row, p] = rowOf(e.target); if (!p) return;
+  const v = dcVals(p).slice(), c = PMAP[p.item];
+  if (x) v.splice(+x.dataset.k, 1);
+  else if (c.values) v.push(c.values.find(o => !v.some(y => String(y).split(':')[0].trim() === o.split(':')[0].trim())) || '');
+  else { const nums = v.filter(y => y !== '' && isFinite(+y)).map(Number), l = nums.length ? nums[nums.length - 1] : +c.current || 0, d = nums.length > 1 ? l - nums[nums.length - 2] : (Math.abs(l) * .1 || 1); v.push(r6(l + d)); }
+  dcSet(p, v); renderParams(); save();
+  if (a) { const bx = $$(`#parList .prow[data-i="${row.dataset.i}"] .dnv`); if (bx.length) bx[bx.length - 1].focus(); }
+});
+$$('#rankBy button').forEach(b => b.onclick = () => { S.rank = b.dataset.v; renderRunSet(); save(); });
+function dcRunSet() {
+  const on = !!(S.puzzle && S.puzzle.on);
+  $('#nWrap').classList.remove('hidden'); $('#nLabel').textContent = 'Number of modifications';
+  $('#nRuns').max = 20; $('#nRuns').value = on ? Math.max(1, pz().slots || (pz().runs || []).filter(x => (x || []).length).length || 1) : dcMods();
+  $('#rankWrap').classList.remove('hidden');
+  $$('#rankBy button').forEach(b => b.classList.toggle('on', b.dataset.v === (S.rank === 'margin' ? 'margin' : 'least')));
+  const n = PREV && PREV.rows ? PREV.rows.filter(r => Object.keys(r.inputs || {}).length).length : dcMods();
+  $('#runHint').textContent = `Run 0 = the existing design from the full run (no calculation) · ${n} modification${n === 1 ? '' : 's'}, one PLAXIS run each`;
+  $('#nNote').textContent = on ? 'Match the puzzle: each modification is the package of boxes you drop into it under Scheduled modifications.'
+    : 'Modification k takes the k-th new value of every item (one box each). Tick Match the puzzle to build each package yourself.';
+}
+function dcName(r) { const nm = ((S.names || {})[String(r.key)]) || '';
+  return `<input class="mname" data-key="${esc(r.key)}" value="${esc(nm)}" placeholder="name, e.g. Lighter load" title="A name of its own: it carries through to the results, the figures and the report">`; }
+document.addEventListener('change', e => { const el = e.target; if (!el.classList || !el.classList.contains('mname') || !S) return;
+  S.names = {...(S.names || {})}; const v = el.value.trim(); if (v) S.names[el.dataset.key] = v; else delete S.names[el.dataset.key]; save(); });
+async function chooseMod(run) {
+  try { await post(`/api/tasks/${TASK}/choose`, {run}); NEXT = null; await pollResults(); toast('Chosen ★: this modification is handed to Design scenarios.'); } catch (e) { toast(e.message); }
+}
+function modTable(r) {
+  const cols = (r.modifications || []).filter(c => c.results), ex = r.existing || {};
+  if (cols.length < 2) return '';
+  const labels = cols[0].results.map(x => x.label);
+  const head = `<tr><th>Result</th><th class="v">Existing (Run 0)</th>${cols.map(c => `<th class="v${c.chosen ? ' ch' : ''}">${esc(c.title)}${c.chosen ? ' ★' : ''}<span class="cg">${esc(c.values)}</span></th>`).join('')}<th>Criterion</th></tr>`;
+  const ok = b => b === true ? ' <span class="ok">✓</span>' : b === false ? ' <span class="miss">✗</span>' : '';
+  const body = labels.map(lab => { const t0 = cols[0].results.find(x => x.label === lab);
+    return `<tr><td>${esc(lab + unitTxt(t0.unit))}</td><td class="v">${t0.old != null ? fmtNum(t0.old) : '—'}${ok(t0.meets_old)}</td>${cols.map(c => { const x = c.results.find(y => y.label === lab);
+      return `<td class="v">${x ? `${fmtNum(x.new)}${ok(x.meets_new)}${x.change != null ? `<span class="cg ${x.effect === 'improves' ? 'good' : x.effect === 'worsens' ? 'bad' : ''}">${x.change > 0 ? '+' : ''}${fmtNum(+x.change.toFixed(1))} %</span>` : ''}` : '—'}</td>`; }).join('')}
+      <td>${t0.operator !== 'report' && t0.limit != null ? `${esc(({'<=': '≤', '>=': '≥'})[t0.operator] || t0.operator)} ${fmtNum(t0.limit)}` : '<span class="meta">none</span>'}</td></tr>`; }).join('');
+  const eff = `<tr class="sum"><td>Effect</td><td></td>${cols.map(c => `<td class="v">improves ${c.improves} · worsens ${c.worsens}</td>`).join('')}<td></td></tr>`;
+  const rank = `<tr class="sum"><td>Governing margin · rank</td><td class="v">${ex.margin != null ? `${ex.margin > 0 ? '+' : ''}${fmtNum(+ex.margin.toFixed(1))} %` : '—'}${ex.meets === false ? ' · fails' : ''}</td>${cols.map(c => `<td class="v">${c.margin != null ? `${c.margin > 0 ? '+' : ''}${fmtNum(c.margin)} % · ` : ''}rank ${c.rank}${c.meets === false ? ' · fails' : ''}</td>`).join('')}<td></td></tr>`;
+  const choose = `<tr><td class="meta">Hand to Design scenarios</td><td></td>${cols.map(c => `<td class="v">${c.chosen ? '<span class="pill">★ chosen</span>' : `<button class="small" data-choose="${c.run}">Choose ★</button>`}</td>`).join('')}<td></td></tr>`;
+  const fail = (r.modifications || []).filter(c => !c.results).map(c => `${esc(c.title)}: ${esc(c.status)}`).join(' · ');
+  return `<div class="tblWrap" style="margin-bottom:.8rem"><table class="modT"><thead>${head}</thead><tbody>${body}${eff}${rank}${choose}</tbody></table></div>
+    <p class="meta">Ranked by ${esc((r.rank_rule || {}).text || 'least change that meets every criterion')} (Runs box). ${fail ? 'Not calculated: ' + fail + '.' : ''}</p>`;
+}
+document.addEventListener('click', e => { const b = e.target.closest('[data-choose]'); if (b && TASK) chooseMod(+b.dataset.choose); });
 
 /* ============ PROJECTS: list, Open, Save, Save As, Close ============ */
 const MODE_TITLES = {sensitivity: 'Sensitivity analysis', optimize: 'Design optimization', design_change: 'Design modification',

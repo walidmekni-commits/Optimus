@@ -218,6 +218,42 @@ def figure(spec: dict) -> bytes:
             a.set_title(textwrap.fill(f"{c['label']}{_unit(c)}", 24) + (f"\n{ch:+.1f} %" if ch is not None else ""), fontsize=9)
         fig.tight_layout()  # the title is the caption under the figure (web page, Excel and Word)
         return _png(fig, plt)
+    elif k == "compare_many":  # Rev B W1.5: existing design (grey) and every modification (blue, chosen darker)
+        t, bars = spec["target"], spec["bars"]
+        labels = ["Existing"] + [b[0] for b in bars]
+        vals = [spec["existing"] if S._isnum(spec.get("existing")) else 0] + [float(b[1]) for b in bars]
+        cols = [GREY] + [GREEN if b[2] else BLUE for b in bars]
+        import textwrap
+        b = ax.bar([textwrap.fill(x, 14) for x in labels], vals, color=cols, width=0.62, zorder=3)
+        for bar, val in zip(b, vals):
+            ax.annotate(S.fmt(float(val)), (bar.get_x() + bar.get_width() / 2, bar.get_height()),
+                        textcoords="offset points", xytext=(0, 3), ha="center", fontsize=8)
+        if S._isnum(spec.get("limit")):
+            ax.axhline(float(spec["limit"]), color=RED, lw=1.3, ls="--", zorder=4, label=f"Criterion {t['operator']} {S.fmt(float(spec['limit']))}")
+            ax.legend(loc="best", fontsize=8)
+        ax.set_ylabel(f"{t['label']}{_unit(t)}")
+        ax.grid(axis="x", visible=False)
+        if len(labels) > 5:
+            plt.setp(ax.get_xticklabels(), rotation=30, ha="right", fontsize=8)
+    elif k == "change_heat":  # Rev B W1.5: change % of every result in every modification (green improves, red worsens)
+        rows, cols, vals = spec["rows"], spec["cols"], spec["values"]
+        plt.close(fig)
+        fig, ax = plt.subplots(figsize=(max(5.0, 1.25 * len(cols) + 3.2), max(1.8, 0.48 * len(rows) + 1.2)))
+        import numpy as np
+        z = np.array([[(-(v or 0.0) if low else (v or 0.0)) for v in row] for row, low in zip(vals, spec["lower"])], dtype=float)
+        lim = max(1.0, float(np.nanmax(np.abs(z))) if z.size else 1.0)
+        ax.imshow(z, cmap="RdYlGn", vmin=-lim, vmax=lim, aspect="auto")
+        for i, row in enumerate(vals):
+            for j, v in enumerate(row):
+                strong = v is not None and abs(z[i][j]) > 0.6 * lim
+                ax.text(j, i, "—" if v is None else f"{v:+.1f} %", ha="center", va="center", fontsize=8,
+                        color="white" if strong else INK, fontweight="bold" if strong else "normal")
+        import textwrap
+        ax.set_xticks(range(len(cols)), [textwrap.fill(c, 14) for c in cols], fontsize=8)
+        ax.set_yticks(range(len(rows)), [textwrap.fill(r, 34) for r in rows], fontsize=8)
+        ax.grid(False)
+        for sp in ax.spines.values():
+            sp.set_visible(False)
     fig.tight_layout()
     return _png(fig, plt)
 
@@ -316,7 +352,30 @@ def excel(project: dict, task: dict, out: dict, runs_all: list[dict], figs: list
         ws2.column_dimensions[get_column_letter(i)].width = 8 if i == 1 else 20
     ws2.freeze_panes = "B2"
 
-    if out.get("comparison"):
+    done = [c for c in out.get("modifications") or [] if "results" in c]
+    if len(out.get("modifications") or []) > 1 and done:  # Rev B W1.6: one column per modification, then the ranking
+        ws3 = wb.create_sheet("Modifications")
+        labels = [x["label"] for x in done[0]["results"]]
+        rows = []
+        for lab in labels:
+            t0 = next(x for x in done[0]["results"] if x["label"] == lab)
+            row = [lab, t0["unit"], t0["old"]]
+            for c in done:
+                x = next((y for y in c["results"] if y["label"] == lab), None)
+                row += [x["new"] if x else "", round(x["change"], 2) if x and x.get("change") is not None else ""]
+            row.append(f"{t0['operator']} {S.fmt(float(t0['limit']))}" if t0["operator"] != "report" and S._isnum(t0.get("limit")) else "")
+            rows.append(row)
+        hdr3 = ["Result", "Unit", "Existing design"] + [h for c in done for h in (c["title"], "Change (%)")] + ["Criterion"]
+        _table(ws3, 1, hdr3, rows, head, hfont, box)
+        r0 = len(rows) + 3
+        _table(ws3, r0, ["Rank", "Modification", "Run", "Package of changes", "Meets every criterion", "Governing margin (%)",
+                         "Improves", "Worsens", "Chosen"],
+               [[c["rank"], c["title"], c["run"], c["values"], {True: "yes", False: "no", None: "no criterion"}[c["meets"]],
+                 c["margin"] if c.get("margin") is not None else "", c["improves"], c["worsens"], "★" if c["chosen"] else ""]
+                for c in sorted(done, key=lambda c: c["rank"])], head, hfont, box)
+        for i in range(1, len(hdr3) + 1):
+            ws3.column_dimensions[get_column_letter(i)].width = 34 if i == 1 else 18
+    elif out.get("comparison"):
         ws3 = wb.create_sheet("Old vs new")
         _table(ws3, 1, ["Result", "Unit", "Existing design", "Modified design", "Change (%)"],
                [[c["label"], c["unit"], c["old"], c["new"], round(c["change"], 2) if c.get("change") is not None else ""]
@@ -833,7 +892,52 @@ def word(project: dict, task: dict, out: dict, runs_all: list[dict], figs: list[
                   f"{S.fmt(st['max'])} (Run {st['max_run']})", S.fmt(st["mean"]),
                   f"{st['spread']:.1f} %" if st.get("spread") is not None else "—"] for st in out["stats"]])
         n += 1
-    if out.get("comparison"):
+    many = [c for c in out.get("modifications") or []]
+    if len(many) > 1:  # Rev B W1.6: the modifications, their comparison, the ranking and the chosen one
+        done = [c for c in many if "results" in c]
+        d.add_heading(f"{n}. The modifications", 1)
+        d.add_paragraph("Each modification is one package of changes to the existing design (Run 0, the full run of the "
+                        "Original File), calculated as one PLAXIS run.")
+        _caption(d, "The modifications and their package of changes.", "Table")
+        _wtable(d, ["Modification", "Run", "Package of changes", "Status"],
+                [[c["title"], str(c["run"]), c["values"], c["status"]] for c in many])
+        n += 1
+        if done:
+            ex = out.get("existing") or {}
+            d.add_heading(f"{n}. Comparison of every modification with the existing design", 1)
+            d.add_paragraph("Value of each result, its change against the existing design and ✓ / ✗ against its "
+                            "acceptance criterion.")
+            _caption(d, "Existing design and every modification.", "Table")
+            labels = [x["label"] for x in done[0]["results"]]
+            rows = []
+            for lab in labels:
+                t0 = next(x for x in done[0]["results"] if x["label"] == lab)
+                o = t0["old"]
+                row = [f"{lab}{_unit(t0)}", (S.fmt(float(o)) if S._isnum(o) else "—") + _ok(t0["meets_old"])]
+                for c in done:
+                    x = next((y for y in c["results"] if y["label"] == lab), None)
+                    row.append("—" if not x else S.fmt(float(x["new"])) + _ok(x["meets_new"])
+                               + (f" ({x['change']:+.1f} %)" if x.get("change") is not None else ""))
+                row.append(f"{t0['operator']} {S.fmt(float(t0['limit']))}" if t0["operator"] != "report" and S._isnum(t0.get("limit")) else "none")
+                rows.append(row)
+            rows.append(["Effect", ""] + [f"improves {c['improves']} · worsens {c['worsens']}" for c in done] + [""])
+            rows.append(["Governing margin · rank", (f"{ex['margin']:+.1f} %" if ex.get("margin") is not None else "—")]
+                        + [(f"{c['margin']:+.1f} % · " if c.get("margin") is not None else "") + f"rank {c['rank']}" + (" ★" if c["chosen"] else "")
+                           for c in done] + [""])
+            _wtable(d, ["Result", "Existing (Run 0)"] + [c["title"] for c in done] + ["Criterion"], rows)
+            n += 1
+            d.add_heading(f"{n}. Ranking and the chosen modification", 1)
+            v = out.get("verdict") or {}
+            d.add_paragraph(f"Ranked by {out['rank_rule']['text']}. The chosen modification (★) is {v.get('chosen_title', '—')}: "
+                            "it is the one handed over to Design scenarios as the base scenario.")
+            _caption(d, "Ranking of the modifications.", "Table")
+            _wtable(d, ["Rank", "Modification", "Meets every criterion", "Governing margin", "Change from the existing design"],
+                    [[str(c["rank"]) + (" ★" if c["chosen"] else ""), c["title"],
+                      {True: "yes", False: "no: " + ", ".join(c["failing"]), None: "no criterion"}[c["meets"]],
+                      f"{c['margin']:+.1f} %" if c.get("margin") is not None else "—", f"{c['size'] * 100:.1f} %"]
+                     for c in sorted(done, key=lambda c: c["rank"])])
+            n += 1
+    elif out.get("comparison"):
         d.add_heading(f"{n}. Existing and modified design", 1)
         _wtable(d, ["Result", "Existing design", "Modified design", "Change"],
                 [[f"{c['label']}{_unit(c)}", S.fmt(c["old"]) if c["old"] is not None else "—", S.fmt(c["new"]),
@@ -874,7 +978,7 @@ def word(project: dict, task: dict, out: dict, runs_all: list[dict], figs: list[
         n += 1
     ts0 = [t for t in plan["targets"] if (t.get("result") or "").lower() != "file"]
     base = next((r for r in runs_all if not (r.get("inputs") or {}) and r.get("status") == "succeeded"), None)
-    if "tables" in vis and base and ts0:
+    if "tables" in vis and base and ts0 and len(many) <= 1:  # Rev B W1.6 / M7: not repeated after the comparison chapter
         d.add_heading(f"{n}. Comparison with the Original File", 1)
         d.add_paragraph("Each run against the Original File (Run 0): the value and its change in %.")
         _caption(d, "Results of every run and their change against the Original File.", "Table")
@@ -969,6 +1073,10 @@ def word(project: dict, task: dict, out: dict, runs_all: list[dict], figs: list[
     return buf.getvalue()
 
 
+def _ok(b) -> str:
+    return " ✓" if b is True else " ✗" if b is False else ""
+
+
 def key_findings(out: dict, runs_all: list[dict]) -> list[str]:
     """The main findings, one line each, under the conclusion (page and Word)."""
     rows = out.get("rows") or []
@@ -1006,7 +1114,13 @@ def key_findings(out: dict, runs_all: list[dict]) -> list[str]:
     for g in out.get("governing") or []:
         f.append(f"Governing scenario for {g['label']}: Run {g['governing_run']} ({g['values']}) with {S.fmt(g['governing'])}{(' ' + g['unit']) if g['unit'] else ''}.")
     v = out.get("verdict") or {}
-    if "improves" in v:
+    if "improves" in v and v.get("total", 1) > 1:
+        f.append(f"{v['passing']} of {v['calculated']} calculated modifications meet every acceptance criterion.")
+        for c in sorted([c for c in out.get("modifications") or [] if c.get("rank")], key=lambda c: c["rank"]):
+            f.append(f"Rank {c['rank']}{' ★ chosen' if c['chosen'] else ''}: {c['title']} ({c['values']}): {c['improves']} result(s) "
+                     f"improve, {c['worsens']} worsen" + (f", governing margin {c['margin']:+.1f} %" if c.get("margin") is not None else "")
+                     + ("; NOT met: " + ", ".join(c["failing"]) if c["meets"] is False else "") + ".")
+    elif "improves" in v:
         f.append(f"Modification: {v['improves']} result(s) improve, {v['worsens']} worsen"
                  + ("; all acceptance criteria met." if v.get("meets") else "; NOT met: " + ", ".join(v["failing"]) + "." if v.get("meets") is False else "."))
     for m in out.get("missing") or []:

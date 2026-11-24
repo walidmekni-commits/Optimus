@@ -18,6 +18,7 @@ from pydantic import BaseModel
 
 from . import compiled, design, geosel, ai, db, engine, exports, geometry, insight, plaxis_model, report, sequence, settings, study
 from . import accounts, project_files, units
+from . import plan as study_plan
 from .config import backend_name, data_dir, max_runs, runs_dir
 from .planner import build_runs, describe_plan, show, validate
 from .offline_ai import guess_section
@@ -1639,6 +1640,79 @@ def study_results(tid: str, swap: int | None = None):
     return {**out, "status": t["status"], "figures": exports.figures_b64(figs), "error": t.get("error"),
             "pct": round(min(100.0, pct), 1), "progress": (f"Run {cur['run']}: {prog['message']}" if cur and prog.get("message") else ""),
             "targets": t["plan"]["targets"], "variables": t["plan"]["variables"]}
+
+
+# --- Rev B of the module interface: Study plan, What next?, the handover and the chosen modification ------------
+@app.get("/api/projects/{pid}/plan")
+def get_plan(pid: str):
+    p = _project_or_404(pid)
+    return {"plan": study_plan.clean((p["setup"] or {}).get("plan")), "chains": study_plan.CHAINS, "chain_text": study_plan.CHAIN_TEXT,
+            "takes": {f"{a}>{b}": t for (a, b), t in study_plan.TAKES.items()}, "default_next": study_plan.DEFAULT_NEXT,
+            "questions": study_plan.QUESTION}
+
+
+@app.put("/api/projects/{pid}/plan")
+def put_plan(pid: str, body: dict):
+    """The Study plan (first page of the study page) and the order of the What next? suggestions, saved with the project."""
+    p = _project_or_404(pid)
+    pl = study_plan.clean(body)
+    db.update_project(pid, setup={**p["setup"], "plan": pl})
+    return {"plan": pl}
+
+
+@app.get("/api/tasks/{tid}/next")
+def task_next(tid: str):
+    t, out, _allruns, _figs = _study_results(tid, None)
+    p = db.get_project(t["project_id"]) or {}
+    mode = (t["plan"].get("study") or {}).get("mode") or t["objective"]
+    return study_plan.what_next(mode, (p.get("setup") or {}).get("plan"), {**out, "targets": t["plan"]["targets"]})
+
+
+@app.post("/api/tasks/{tid}/handover")
+def task_handover(tid: str, body: dict):
+    """Proceed ({"save": "open"}: the next module opens with the study pre-filled from this one) or Pre-fill only
+    ({"save": "prefill"}: kept until that module is opened). Nothing is calculated."""
+    to = (body or {}).get("to")
+    if to not in study.MODES:
+        raise HTTPException(400, "Unknown module")
+    t = _task_or_404(tid)
+    if t["status"] in ("queued", "running"):
+        raise HTTPException(409, "The runs are still calculating.")
+    t, out, allruns, _figs = _study_results(tid, None)
+    s = study.clean(study_plan.handover({**t, "id": tid}, out, allruns, to))
+    how = (body or {}).get("save", "open")
+    if how in ("open", "prefill", True):
+        p = _project_or_404(t["project_id"])
+        pre = {k: v for k, v in ((p["setup"] or {}).get("prefill") or {}).items() if k != to}
+        if how == "prefill":  # Pre-fill only: kept until the module is opened
+            pre[to] = s
+            db.update_project(p["id"], setup={**p["setup"], "prefill": pre})
+        else:  # Proceed: the next module opens with it
+            db.update_project(p["id"], setup={**p["setup"], "study": s, "prefill": pre})
+        db.log("handover", {"from": tid, "to": to, "how": how, "taken": s["link"]["taken"]}, p["id"], tid)
+    return {"study": s}
+
+
+@app.delete("/api/projects/{pid}/prefill/{mode}")
+def drop_prefill(pid: str, mode: str):
+    p = _project_or_404(pid)
+    pre = {k: v for k, v in ((p["setup"] or {}).get("prefill") or {}).items() if k != mode}
+    db.update_project(pid, setup={**p["setup"], "prefill": pre})
+    return {"ok": True}
+
+
+@app.post("/api/tasks/{tid}/choose")
+def task_choose(tid: str, body: dict):
+    """Rev B W1.5 Choose ★: the modification handed to Design scenarios (default: rank 1)."""
+    t = _task_or_404(tid)
+    run = (body or {}).get("run")
+    st = dict(t["plan"].get("study") or {})
+    if run is None:
+        st.pop("chosen", None)
+    else:
+        st["chosen"] = int(run)
+    db.update_task(tid, plan={**t["plan"], "study": st})
+    return {"ok": True, "chosen": st.get("chosen")}
 
 
 def _fname(t: dict, ext: str) -> str:
