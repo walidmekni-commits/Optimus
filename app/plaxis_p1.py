@@ -773,5 +773,17 @@ class P1Mixin:
         return vs
 
     @staticmethod
+    def q_total(g_o, phase_o, rgroup, is3: bool) -> list[float]:
+        """QA V26.1.9 D6: |q| = √(qx² + qy² + qz²) at each node (PLAXIS 3D has no Qtot result)."""
+        from .solvers import SolverError
+        comps = []
+        for c in ("Qx", "Qy", "Qz") if is3 else ("Qx", "Qy"):
+            try:
+                comps.append([float(x) for x in g_o.getresults(phase_o, getattr(rgroup, c), "node")])
+            except Exception as e:  # noqa: BLE001
+                raise SolverError(f"not in this PLAXIS: specific discharge {c} ({e})")
+        return [math.sqrt(sum(v * v for v in vs)) for vs in zip(*comps)]
+
+    @staticmethod
     def is_force(result: str) -> bool:
         return result.split(".")[0].strip().lower() in FORCE_GROUPS

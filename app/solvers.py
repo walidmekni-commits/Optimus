@@ -1079,14 +1079,8 @@ class PlaxisSolver(P1Mixin, P2Mixin):
                 if rtype.lower() != "qtot":
                     raise
                 rt = None
-            if rt is None:  # QA V26.1.9 D6: PLAXIS 3D has no Qtot: |q| = √(qx² + qy² + qz²) at each node
-                comps = []
-                for c in ("Qx", "Qy", "Qz") if is3 else ("Qx", "Qy"):
-                    try:
-                        comps.append([float(x) for x in g_o.getresults(phase_o, getattr(rgroup, c), "node")])
-                    except Exception as e:  # noqa: BLE001
-                        raise SolverError(f"not in this PLAXIS: specific discharge {c} ({e})")
-                res = [math.sqrt(sum(v * v for v in vs)) for vs in zip(*comps)]
+            if rt is None:  # QA V26.1.9 D6: PLAXIS 3D has no Qtot: |q| from qx, qy, qz
+                res = self.q_total(g_o, phase_o, rgroup, is3)
             else:
                 res = g_o.getresults(phase_o, rt, "node")
             try:
