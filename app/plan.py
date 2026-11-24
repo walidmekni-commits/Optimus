@@ -133,7 +133,7 @@ def handover(src_task: dict, out: dict, runs: list[dict], to: str) -> dict:
         s["time"] = src["time"]
     if src.get("features"):
         s["features"] = src["features"]
-    link = {"task": src_task["id"], "mode": mode, "title": _title(mode), "taken": []}
+    link = {"task": src_task["id"], "mode": mode, "title": _title(mode), "to": to, "taken": []}
     # the results: what the source study read is what the next one compares / follows
     keys = list(dict.fromkeys(t["key"] for t in plan["targets"] if t.get("key") and not t.get("stage") and t["key"] != "file"))
     crit = [{"output": t.get("output"), "operator": t.get("operator") or "<=", "value": t.get("value")}
@@ -150,9 +150,29 @@ def handover(src_task: dict, out: dict, runs: list[dict], to: str) -> dict:
     else:
         s["outputs"] = keys
     if to == "combinations" and mode == "design_change":
+        # QA D10: the chosen modification is the base scenario: its values are in every scenario (one fixed value per
+        # item, frozen), Run 0 stays the existing design (the reference scenario), and the criteria are the targets
+        s["criteria"] = crit
+        s["baseline"] = True
         ch = next((c for c in out.get("modifications") or [] if c.get("chosen")), None)
-        if ch:
-            link["taken"].append(f"base scenario = {ch['title']} ({ch['values']})")
+        run = next((r for r in runs if ch and r.get("no") == ch["run"]), None)
+        vmap = {v["name"]: v for v in plan["variables"]}
+        if run:
+            base = []
+            for name, val in (run.get("inputs") or {}).items():
+                var = vmap.get(name)
+                if not var:
+                    continue
+                v = _decode(var, val)
+                if var.get("kind") == "values":
+                    base.append({"item": var["item"], "values": [v], "frozen": True, "base": True})
+                else:
+                    base.append({"item": var["item"], "how": "list", "list": S.fmt(float(v)) if S._isnum(v) else str(v),
+                                 "min": v, "max": v, "frozen": True, "base": True})
+            s["params"] = base
+            s["runs"] = 2  # Run 0 (existing design) + the base scenario; add the factors / other items as scenarios
+            link["taken"].append(f"base scenario = {ch['title']} ({ch['values']}), in every scenario")
+            link["taken"].append("reference scenario = the existing design (Run 0)")
         if crit:
             link["taken"].append("acceptance criteria → scenario targets: " + _crit_text(crit, plan))
     if to == "design_change":
@@ -165,7 +185,7 @@ def handover(src_task: dict, out: dict, runs: list[dict], to: str) -> dict:
         packages, names = [], {}
         if best:  # Modification 1 = the recommended run
             packages.append(dict(best["inputs"]))
-            names[str(len(packages))] = f"{link['title'][:12].strip()} · Run {best['no']}"
+            names[str(len(packages))] = f"{link['title']} · Run {best['no']}"  # QA D13: the full module name
             link["taken"].append(f"Modification 1 = Run {best['no']} ({rows.get(best['no'], {}).get('values', '')})")
             g = o.get("governing")
             gv = next((v for v in plan["variables"] if v["label"] == (g or {}).get("var")), None)
