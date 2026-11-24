@@ -65,6 +65,9 @@ def _run_task(task_id: str) -> None:
     solver.want_model = bool(plan.get("basic"))
     from .study import needs_gravity_initial
     solver.gravity_initial = needs_gravity_initial(plan, db.get_runs(task_id))  # V26.1.8: Soft Soil Creep → gravity loading in every run
+    # V26.1.9: what PLAXIS adds in every run of the study: safety phases, new structures, a dynamic phase
+    for k, v in (plan.get("features") or {}).items():  # set when the study's runs were made (main._start_study_task)
+        setattr(solver, k, v)
     tm = (plan.get("study") or {}).get("time") or {}
     solver.longterm = float(tm.get("longterm") or 0) if tm.get("on") or (plan.get("study") or {}).get("series") else 0.0  # V26.1.8  # the full run of the uploaded model also reads its geometry
     # PLAXIS Output images of each run, as chosen in "What do you prefer to visualize?" (the full run: the main ones)

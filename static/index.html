@@ -375,6 +375,11 @@
   .tlab { font-weight:600; font-size:.88rem; margin-left:.3rem; }
   .detBox, .scrBox { margin-top:.8rem; padding:.6rem .8rem; border:1px solid var(--line); border-radius:.6rem; background:var(--soft); }
   .detBox .head, .scrBox .head { display:flex; gap:.6rem; align-items:center; flex-wrap:wrap; }
+  .featBox { margin-top:.6rem; border:1px solid var(--line); border-radius:8px; padding:.35rem .6rem; }
+  .featBox summary { cursor:pointer; font-weight:600; } .featBox h4 { margin:.7rem 0 .2rem; font-size:.92rem; }
+  .featBox table { border-collapse:collapse; width:100%; font-size:.85rem; } .featBox td, .featBox th { padding:.15rem .25rem; text-align:left; }
+  .featBox input[type=number] { width:5.2rem; } .featBox .faRow { border-top:1px dashed var(--line); padding:.35rem 0; }
+  .featBox .faHead { display:flex; gap:.4rem; align-items:center; } .featBox input.fName { width:8rem; } .featBox .fNote { font-size:.8rem; color:var(--muted); }
   .chips2 { display:flex; flex-wrap:wrap; gap:.3rem .8rem; margin-top:.5rem; } .chips2 label { font-size:.88rem; white-space:nowrap; }
   .chips2 .dom { width:100%; font-size:.78rem; color:var(--muted); text-transform:uppercase; letter-spacing:.04em; margin-top:.2rem; }
   .rank { width:100%; } .rank td { padding:.2rem .4rem; border:none; font-size:.88rem; } .rank .bar { height:.8rem; background:var(--accent2); border-radius:0 .25rem .25rem 0; min-width:2px; }
@@ -491,7 +496,7 @@
   <div class="nm">OPTIMUS<sup class="reg">®</sup></div>
   <div class="eng">Engineering Optimization Engine</div>
   <div class="ld"><i></i></div>
-  <div class="ver">PLAXIS 2D · 3D automation · V26.1.8</div>
+  <div class="ver">PLAXIS 2D · 3D automation · V26.1.9</div>
 </div>
 <script>(function () { var s = document.getElementById('splash'), done = false;
   try { if (sessionStorage.getItem('optSplash')) { s.parentNode.removeChild(s); return; } sessionStorage.setItem('optSplash', '1'); } catch (e) {}
@@ -621,6 +626,7 @@
       <div id="timeBox" class="hidden" style="margin-top:.5rem"></div>
       <div class="meta" id="nNote"></div>
       <div class="repVis" id="runVis"></div>
+      <details class="featBox" id="featBox"><summary>⚙ PLAXIS features of the study <span class="meta" id="featSum"></span></summary><div id="featBody"></div></details>
       </div>
     </section>
     </div>
@@ -1221,7 +1227,7 @@ function renderAll() {
   const t = TXT[S.mode];
   $('#parTitle').textContent = t.par; $('#parHint').textContent = t.parHint;
   $('#outTitle').textContent = t.out; $('#outHint').textContent = t.outHint; $('#addOut').textContent = t.add;
-  renderParams(); renderOuts(); renderRunSet(); renderScreen(); vPaint(); renderVisPrefs();
+  renderParams(); renderOuts(); renderRunSet(); renderScreen(); vPaint(); renderVisPrefs(); renderFeat();
 }
 const domOpts = (doms, cur) => Object.entries(doms).map(([k, l]) => `<option value="${k}"${k === cur ? ' selected' : ''}>${esc(l)}</option>`).join('');
 const usedDomains = () => { const d = {}; (CAT ? CAT.params : []).forEach(p => d[p.domain] = 1); return Object.fromEntries(Object.entries(CAT.domains).filter(([k]) => d[k])); };
@@ -1932,6 +1938,74 @@ function renderTime() {
 $('#timeOn').onchange = () => { S.time = {...(S.time || {}), on: $('#timeOn').checked}; if (S.time.longterm == null) S.time.longterm = 365; renderTime(); save(); };
 $('#ltDays').onchange = () => { S.time = {...(S.time || {}), longterm: Math.max(0, +$('#ltDays').value || 0)}; save(); };
 
+/* V26.1.9: PLAXIS features of the study (QA/QC report for missing features, P1): a safety phase after chosen stages,
+   results at chosen points, new structures drawn from two points, a dynamic phase, the tunnel diameter */
+const featKey = s => JSON.stringify([s.safety, s.probes, s.added, s.dynamic, s.tunnel]);
+let FEATK = null;
+function renderFeat() {
+  const box = $('#featBody'); if (!box || !S || !CAT) return;
+  S.safety = S.safety || {after: []}; S.probes = S.probes || []; S.added = S.added || [];
+  S.dynamic = S.dynamic || {on: false, after: '', source: 'base', amplitude: 0.01, frequency: 2, duration: 5}; S.tunnel = S.tunnel || {};
+  if (FEATK === null) FEATK = featKey(S);
+  const is3 = MODEL ? MODEL.version === '3d' : (CAT.params || []).some(p => /\.z$/.test(p.ref || ''));
+  const up = is3 ? 'z' : 'y', ax = is3 ? ['x', 'y', 'z'] : ['x', 'y'];
+  const phs = (CAT.all_phases || []).filter((p, i) => i > 0 && !/safety/i.test(`${p.type} ${p.label}`));
+  const phOpts = cur => phs.map(p => `<option value="${esc(p.name)}"${p.name === cur ? ' selected' : ''}>${esc(p.label)}</option>`).join('');
+  const kinds = CAT.kinds || {}, mats = CAT.materials || [], pts = (MODEL && MODEL.points) || [];
+  const matKind = k => k === 'embedded_beam' ? ['embedded_beam', 'beam'] : [k];
+  const n = (S.safety.after || []).length + S.probes.length + S.added.length + (S.dynamic.on ? 1 : 0);
+  $('#featSum').textContent = n ? `${n} in use` : 'safety phases, results at points, new structures, dynamics';
+  box.innerHTML = `
+    <h4>Factor of safety per stage</h4><div class="fNote">A safety phase (φ/c reduction) is added after each ticked stage in every run, Run 0 included: ΣMsf is read for each.</div>
+    <div class="chips2">${phs.map(p => `<label><input type="checkbox" class="fSafe" value="${esc(p.name)}"${S.safety.after.includes(p.name) ? ' checked' : ''}> ${esc(p.label)}</label>`).join('') || '<span class="meta">No construction stage in the model.</span>'}</div>
+    <h4>Results at chosen points</h4><div class="fNote">e.g. a building corner: |u|, ux and ${is3 ? 'uz' : 'uy'} at the point are offered as results (with Results over time: at every stage).</div>
+    <table><tr><th>Name</th>${ax.map(a => `<th>${a} (m)</th>`).join('')}<th></th></tr>${S.probes.map((p, i) => `<tr data-i="${i}"><td><input class="fName fpN" value="${esc(p.name)}"></td>${ax.map(a => `<td><input type="number" step="any" class="fpC" data-a="${a}" value="${esc(p[a] ?? '')}"></td>`).join('')}<td><button class="small ghost fpDel" title="Remove">✕</button></td></tr>`).join('')}</table>
+    <button class="small fpAdd">＋ Add a point</button> ${pts.length ? `<select class="fpFrom"><option value="">or take a model point…</option>${pts.map((p, i) => `<option value="${i}">${esc(p.name)} (${ax.map(a => fmtNum(p[a])).join(', ')})</option>`).join('')}</select>` : ''}
+    <h4>New structures</h4><div class="fNote">An anchor row, a strut level, an extra pile… drawn in PLAXIS from two points. Each one becomes a variable (Add it: not added / added, and its level shift in ${up}) in section 2, under Structures › New structures.</div>
+    ${S.added.map((a, i) => `<div class="faRow" data-i="${i}"><div class="faHead"><b>${esc(a.id)}</b> <select class="faK">${Object.entries(kinds).filter(([k]) => is3 || k !== 'beam').map(([k, l]) => `<option value="${k}"${k === a.kind ? ' selected' : ''}>${esc(l)}</option>`).join('')}</select> <button class="small ghost faDel" title="Remove">✕</button></div>
+      <div class="chips2"><span class="meta">Start</span>${ax.map(c => `<label>${c} <input type="number" step="any" class="faP" data-p="a" data-a="${c}" value="${esc((a.a || {})[c] ?? '')}"></label>`).join('')}</div>
+      <div class="chips2"><span class="meta">End</span>${ax.map(c => `<label>${c} <input type="number" step="any" class="faP" data-p="b" data-a="${c}" value="${esc((a.b || {})[c] ?? '')}"></label>`).join('')}</div>
+      <div class="chips2"><label>Material <select class="faM"><option value="">(PLAXIS default)</option>${mats.filter(m => matKind(a.kind).includes(m.kind)).map(m => `<option value="${esc(m.name)}"${m.name === a.material ? ' selected' : ''}>${esc(m.id)}</option>`).join('')}</select></label>
+        <label>active from <select class="faS">${phOpts(a.phase)}</select></label>
+        ${is3 && a.kind === 'plate' ? `<label>width along y <input type="number" step="any" class="faW" value="${esc(a.width ?? '')}"> m</label>` : ''}
+        ${a.kind === 'anchor' ? `<label>prestress <input type="number" step="any" class="faPre" value="${esc(a.prestress ?? '')}"> kN</label>` : ''}</div></div>`).join('')}
+    <button class="small faAdd">＋ Add a new structure</button>
+    <h4>Dynamic load</h4><label><input type="checkbox" id="fdOn"${S.dynamic.on ? ' checked' : ''}> Add a dynamic phase (harmonic; needs PLAXIS with the Dynamics module)</label>
+    <div class="chips2${S.dynamic.on ? '' : ' hidden'}" id="fdBox"><label>after <select id="fdAfter">${phOpts(S.dynamic.after)}</select></label>
+      <label>on <select id="fdSrc"><option value="base">the model base (shaking)</option>${(CAT.loads || []).map(l => `<option value="${esc(l)}"${l === S.dynamic.source ? ' selected' : ''}>${esc(l)}</option>`).join('')}</select></label>
+      <label>amplitude <input type="number" step="any" id="fdAmp" value="${esc(S.dynamic.amplitude)}"> <span class="meta">${S.dynamic.source === 'base' ? 'm' : 'load unit'}</span></label>
+      <label>frequency <input type="number" step="any" id="fdFreq" value="${esc(S.dynamic.frequency)}"> Hz</label>
+      <label>duration <input type="number" step="any" id="fdDur" value="${esc(S.dynamic.duration)}"> s</label>
+      <span class="fNote">The amplitude, frequency and duration are variables (section 2, Stages › Dynamic load); ax, vx and ux of the dynamic phase are results.</span></div>
+    ${(CAT.has && (CAT.has.tunnels || CAT.has.contractions)) || S.tunnel.d ? `<h4>Tunnel</h4><label>Tunnel diameter D <input type="number" step="any" id="ftD" value="${esc(S.tunnel.d ?? '')}"> m</label> <span class="fNote">gives the volume loss VL = Vs / (π D² / 4) as a result</span>` : ''}`;
+  const ch = () => { renderFeat(); saveFeat(); };
+  $$('#featBody .fSafe').forEach(x => x.onchange = () => { S.safety.after = $$('#featBody .fSafe').filter(y => y.checked).map(y => y.value); ch(); });
+  const prow = x => S.probes[+x.closest('tr').dataset.i];
+  $$('#featBody .fpN').forEach(x => x.onchange = () => { prow(x).name = x.value; saveFeat(); });
+  $$('#featBody .fpC').forEach(x => x.onchange = () => { prow(x)[x.dataset.a] = x.value === '' ? null : +x.value; saveFeat(); });
+  $$('#featBody .fpDel').forEach(x => x.onclick = () => { S.probes.splice(+x.closest('tr').dataset.i, 1); ch(); });
+  $('#featBody .fpAdd').onclick = () => { S.probes.push({name: `Point ${S.probes.length + 1}`, x: null, y: null, z: null}); ch(); };
+  const from = $('#featBody .fpFrom'); if (from) from.onchange = () => { const p = pts[+from.value]; if (!p) return; S.probes.push({name: p.name, x: p.x, y: p.y, z: p.z}); ch(); };
+  const arow = x => S.added[+x.closest('.faRow').dataset.i];
+  $$('#featBody .faK').forEach(x => x.onchange = () => { arow(x).kind = x.value; arow(x).material = ''; ch(); });
+  $$('#featBody .faP').forEach(x => x.onchange = () => { const a = arow(x); a[x.dataset.p] = a[x.dataset.p] || {}; a[x.dataset.p][x.dataset.a] = x.value === '' ? null : +x.value; saveFeat(); });
+  $$('#featBody .faM').forEach(x => x.onchange = () => { arow(x).material = x.value; saveFeat(); });
+  $$('#featBody .faS').forEach(x => x.onchange = () => { arow(x).phase = x.value; saveFeat(); });
+  $$('#featBody .faW').forEach(x => x.onchange = () => { arow(x).width = x.value === '' ? null : +x.value; saveFeat(); });
+  $$('#featBody .faPre').forEach(x => x.onchange = () => { arow(x).prestress = x.value === '' ? null : +x.value; saveFeat(); });
+  $$('#featBody .faDel').forEach(x => x.onclick = () => { S.added.splice(+x.closest('.faRow').dataset.i, 1); ch(); });
+  $('#featBody .faAdd').onclick = () => { const ids = S.added.map(a => a.id); let k = S.added.length + 1; while (ids.includes('N' + k)) k++;
+    S.added.push({id: 'N' + k, kind: 'anchor', a: {}, b: {}, material: '', phase: (phs[0] || {}).name || '', prestress: null}); ch(); };
+  $('#fdOn').onchange = () => { S.dynamic.on = $('#fdOn').checked; if (S.dynamic.on && !S.dynamic.after) S.dynamic.after = (phs[phs.length - 1] || {}).name || ''; ch(); };
+  [['#fdAfter', 'after', String], ['#fdSrc', 'source', String], ['#fdAmp', 'amplitude', Number], ['#fdFreq', 'frequency', Number], ['#fdDur', 'duration', Number]]
+    .forEach(([id, k, f]) => { const x = $(id); if (x) x.onchange = () => { S.dynamic[k] = f(x.value); if (k === 'source') renderFeat(); saveFeat(); }; });
+  const td = $('#ftD'); if (td) td.onchange = () => { S.tunnel.d = td.value === '' ? null : +td.value; saveFeat(); };
+}
+async function saveFeat() {  // the features add inputs (section 2) and results (section 1): the catalog is read again
+  const r = await saveNow();
+  if (r && r.catalog && featKey(S) !== FEATK) { FEATK = featKey(S); setCatalog(r.catalog); renderParams(); renderOuts(); }
+}
+
 /* save + preview */
 let saveT = null, saving = null, PREV = null;
 function save() { clearTimeout(saveT); saveT = setTimeout(saveNow, 300); }
@@ -2514,7 +2588,7 @@ function geoMsg(html) { $('#geoMsg').innerHTML = html ? `<div class="box">${html
 async function loadModel() {
   const r = await api(`/api/projects/${P.id}/plaxis-model?labels=0`);
   MODEL = r.model || null; OBJS = r.objects || [];
-  vBuild();
+  vBuild(); renderFeat();  // V26.1.9: the model points are offered for the results at chosen points
 }
 async function afterModel(r) {
   MODEL = r.model; OBJS = r.objects || []; P.setup.plaxis = r.version;

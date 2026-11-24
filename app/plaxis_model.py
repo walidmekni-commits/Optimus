@@ -51,6 +51,18 @@ LOAD_UNIT = {("2d", "line"): "kN/m/m", ("2d", "point"): "kN/m", ("3d", "line"): 
              ("3d", "surface"): "kN/m²", ("2d", "surface"): "kN/m²"}
 
 
+# V26.1.9: PLAXIS names of the well discharge and the drain head (the first one this PLAXIS has is used)
+WELL_PROPS = ("Qwell", "Q", "Discharge", "qwell")
+DRAIN_PROPS = ("h", "Head", "hmin")
+STRUCT_GROUPS = {"plate": ("Plates",), "anchor": ("NodeToNodeAnchors", "FixedEndAnchors"), "geogrid": ("Geogrids",),
+                 "embedded_beam": ("EmbeddedBeams", "EmbeddedBeamRows"), "beam": ("Beams",)}
+DRAINAGE_TYPES = ["Drained: 0", "Undrained (A): 1", "Undrained (B): 2", "Undrained (C): 3", "Non-porous: 4"]
+PORE_TYPES = ["Phreatic: 0", "Steady-state groundwater flow: 1", "Use pressures from previous phase: 2"]
+CLUSTER_CONDITIONS = ["Global level: 0", "Dry: 1", "Interpolate: 2"]
+DESIGN_APPROACHES = ["Characteristic values (no factors): 0", "EC7 DA1 Combination 1: 1", "EC7 DA1 Combination 2: 2",
+                     "EC7 DA2*: 3", "EC7 DA3: 4"]
+
+
 # Labels of PLAXIS input parameters (any other numeric input parameter is shown under its PLAXIS name)
 LABELS = {
     "gammaUnsat": "Unit weight γunsat", "gammaSat": "Unit weight γsat", "einit": "Initial void ratio einit",
@@ -73,6 +85,7 @@ LABELS = {
     "TimeInterval": "Time interval", "MaxStepsStored": "Max steps stored", "Deform.ToleratedError": "Tolerated error",
     "Deform.MaxSteps": "Max steps", "Deform.MaxIterations": "Max iterations", "Deform.MaxUnloadingSteps": "Max unloading steps",
     "Deform.MaxLoadFractionPerStep": "Max load fraction per step", "PrestressForce": "Prestress force",
+    "Cref": "Contraction Cref", "Qwell": "Well discharge |Qwell|", "h": "Drain head h", "DeltaInter": "Virtual thickness factor δinter",
 }
 SKIP_PROP = re.compile(r"(?i)colou?r|number|index|^id$|identification|comment|type|model|drainage|behaviou?r|method|"
                        r"^use|valid|flag|count|version|^is[A-Z_]|selected|visible|guid|tabledata|determination|default|"
@@ -239,6 +252,7 @@ def extract(s_i, g_i) -> dict:
     notes = []
     m = {"version": version, "source": "plaxis", "name": "", "points": [], "lines": [], "soil_polygons": [],
          "boreholes": [], "structures": [], "loads": [], "materials": [], "phases": [], "water": [],
+         "interfaces": [], "tunnels": [], "contractions": [], "wells": [], "drains": [], "clusters": [],
          "mesh": {"level": "Medium"}, "notes": notes}
     try:
         m["product"] = f"{s_i.name} {s_i.major_version}.{s_i.minor_version}"
@@ -288,8 +302,13 @@ def extract(s_i, g_i) -> dict:
                     break
             except Exception:  # noqa: BLE001
                 continue
-        m["materials"].append({"name": _name(mat), "id": ident or _name(mat), "kind": kind, "props": props,
-                               "model": model})
+        rec = {"name": _name(mat), "id": ident or _name(mat), "kind": kind, "props": props, "model": model}
+        if kind == "soil":  # V26.1.9: the drainage type (Drained, Undrained A / B / C, Non-porous) is a variable
+            try:
+                rec["drainage"] = str(_v(mat.DrainageType))
+            except Exception:  # noqa: BLE001
+                pass
+        m["materials"].append(rec)
     mat_by = {x["name"]: x for x in m["materials"]}
 
     def mat_of(obj):
@@ -305,6 +324,32 @@ def extract(s_i, g_i) -> dict:
             parent = getattr(o, "Parent", o)
             m["structures"].append({"kind": kind, "name": _name(o), "material": mat_of(o),
                                     "points": _obj_points(parent, is_3d)})
+    # V26.1.9 (QA/QC missing features, P1): interfaces, tunnels, contractions, wells and drains
+    for group, side in (("PositiveInterfaces", "positive"), ("NegativeInterfaces", "negative"), ("Interfaces", "")):
+        for o in _list(g_i, group):
+            if any(x["name"] == _name(o) for x in m["interfaces"]):
+                continue
+            parent = getattr(o, "Parent", o)
+            mode = ""
+            try:
+                mode = str(_v(o.MaterialMode))
+            except Exception:  # noqa: BLE001
+                pass
+            m["interfaces"].append({"name": _name(o), "side": side, "mode": mode, "material": mat_of(o),
+                                    "points": _obj_points(parent, is_3d)})
+    for o in _list(g_i, "Tunnels"):
+        m["tunnels"].append({"name": _name(o)})
+    for group in ("LineContractions", "SurfaceContractions", "Contractions"):
+        for o in _list(g_i, group):
+            parent = getattr(o, "Parent", o)
+            m["contractions"].append({"name": _name(o), "value": _num(getattr(o, "Cref", None)),
+                                      "points": _obj_points(parent, is_3d)})
+    for group, coll, props in (("Wells", "wells", WELL_PROPS), ("Drains", "drains", DRAIN_PROPS)):
+        for o in _list(g_i, group):
+            parent = getattr(o, "Parent", o)
+            prop = next((pr for pr in props if _num(getattr(o, pr, None)) is not None), props[0])
+            m[coll].append({"name": _name(o), "prop": prop, "value": _num(getattr(o, prop, None)),
+                            "points": _obj_points(parent, is_3d)})
     for group, kind in (("LineLoads", "line"), ("PointLoads", "point"), ("SurfaceLoads", "surface")):
         for o in _list(g_i, group):
             props = {}
@@ -380,7 +425,8 @@ def extract(s_i, g_i) -> dict:
             if val is not None:
                 settings["Deform." + prop] = val
         m["phases"].append({"name": _name(ph), "id": str(_v(getattr(ph, "Identification", "")) or _name(ph)),
-                            "type": str(_v(getattr(ph, "DeformCalcType", "")) or ""), "settings": settings})
+                            "type": str(_v(getattr(ph, "DeformCalcType", "")) or ""), "settings": settings,
+                            "pore": str(_v(getattr(ph, "PorePresCalcType", "")) or "")})
     staged = []
     for group, kind in (("LineLoads", "line"), ("PointLoads", "point"), ("SurfaceLoads", "surface")):
         for o in _list(g_i, group):
@@ -407,7 +453,42 @@ def extract(s_i, g_i) -> dict:
                 if val is not None:
                     staged.append({"object": _name(o), "prop": "PrestressForce", "phase": _name(ph), "value": val,
                                    "unit": "kN", "kind": "anchor"})
+    for group, kind, props in (("Wells", "well", WELL_PROPS), ("Drains", "drain", DRAIN_PROPS),
+                               ("LineContractions", "contraction", ("Cref",)), ("SurfaceContractions", "contraction", ("Cref",)),
+                               ("Contractions", "contraction", ("Cref",))):
+        for o in _list(g_i, group):
+            for ph in phases[1:]:
+                try:
+                    if not _v(getattr(o, "Active")[ph]):
+                        continue
+                except Exception:  # noqa: BLE001
+                    continue
+                for prop in props:
+                    val = _staged(o, prop, ph)
+                    if val is not None:
+                        staged.append({"object": _name(o), "prop": prop, "phase": _name(ph), "value": val,
+                                       "unit": {"well": "m³/day", "drain": "m", "contraction": "%"}[kind], "kind": kind})
+                        break
     m["staged"] = staged
+    # V26.1.9: the stages where each structure is active (prestress of an anchor row is offered from its first one)
+    for st in m["structures"]:
+        act = []
+        for group in STRUCT_GROUPS.get(st["kind"], ()):
+            for o in _list(g_i, group):
+                n = _name(o)
+                if n != st["name"] and not n.startswith(st["name"] + "_"):
+                    continue
+                for ph in phases:
+                    try:
+                        if _v(getattr(o, "Active")[ph]) and _name(ph) not in act:
+                            act.append(_name(ph))
+                    except Exception:  # noqa: BLE001
+                        continue
+        if act:
+            order = [_name(ph) for ph in phases]
+            st["active"] = sorted(act, key=order.index)
+    # V26.1.9: the soil clusters of Staged construction (their water conditions per stage: dry, interpolate...)
+    m["clusters"] = [_name(o) for o in _list(g_i, "Soils")][:400]
     for wl in _list(g_i, "WaterLevels"):
         pts = _obj_points(wl, is_3d)
         if pts:
@@ -431,7 +512,8 @@ def finish(m: dict) -> dict:
     """Extents, the axis names and counts; also tidies an uploaded / older JSON."""
     v = m.get("version") if m.get("version") in ("2d", "3d") else "2d"
     m["version"] = v
-    for k in ("points", "lines", "soil_polygons", "boreholes", "structures", "loads", "materials", "phases", "water"):
+    for k in ("points", "lines", "soil_polygons", "boreholes", "structures", "loads", "materials", "phases", "water",
+              "interfaces", "tunnels", "contractions", "wells", "drains", "clusters"):
         m.setdefault(k, [])
     m.setdefault("mesh", {"level": "Medium"})
     m.setdefault("notes", [])
@@ -545,10 +627,22 @@ def demo(version: str = "2d") -> dict:
     lines = [{"name": "Line_1", "a": "Point_5", "b": "Point_6"}, {"name": "Line_2", "a": "Point_7", "b": "Point_8"},
              {"name": "Line_3", "a": "Point_8", "b": "Point_9"}, {"name": "Line_4", "a": "Point_12", "b": "Point_13"},
              {"name": "Line_5", "a": "Point_10", "b": "Point_11"}]
+    for st in structures:  # V26.1.9: the stages where each structure is active
+        st["active"] = [f"Phase_{i}" for i in ((3, 4, 5) if st["kind"] in ("anchor", "geogrid") else (1, 2, 3, 4, 5))]
+    for mat in mats:
+        if mat["kind"] == "soil":
+            mat["drainage"] = "Undrained (A)" if mat["name"] == "Clay" else "Drained"
+            mat["props"].setdefault("Rinter", 0.67 if mat["name"] != "Sand" else 0.7)
+    interfaces = [{"name": f"{side.capitalize()}Interface_1", "side": side, "mode": "From adjacent soil", "material": "",
+                   "points": [list(q) for q in wall]} for side in ("positive", "negative")]
+    base = [[0, -dig - 0.5, 0], [xw, -dig - 0.5, 0]] if not is3 else [[0, 0, -dig - 0.5], [xw, 0, -dig - 0.5], [xw, L, -dig - 0.5], [0, L, -dig - 0.5]]
+    drains = [{"name": "Drain_1", "prop": "h", "value": -dig - 0.5, "points": base}]
     m = {"version": version, "source": "demo", "name": "Example anchored excavation",
          "product": "PLAXIS 3D (example)" if is3 else "PLAXIS 2D (example)", "points": pts, "lines": lines,
          "soil_polygons": polys, "boreholes": holes, "structures": structures, "loads": loads, "materials": mats,
          "phases": phases, "water": water, "mesh": {"level": "Medium"}, "staged": staged,
+         "interfaces": interfaces, "drains": drains, "wells": [], "tunnels": [], "contractions": [],
+         "clusters": [] if is3 else [f"Soil_{i}_1" for i in range(1, 5)],
          "notes": ["Example model: PLAXIS is not connected (simulated solver). Connect PLAXIS in Settings, or upload "
                    "model.json made by plaxis_model.py, to read your own project."]}
     return finish(m)
@@ -738,6 +832,9 @@ def candidates(m: dict) -> list[dict]:
         cur = next((x for x in SOIL_MODELS if x.split(": ")[1] == code), None)
         add(f"smodel:{mat['name']}", "soil", f"Soil material · {mat['name']}", f"{mat['name']} soil model",
             f"{mat['name']}.SoilModel", "", cur or code or "", kind="values", values=list(SOIL_MODELS))
+        dcur = _code_value(DRAINAGE_TYPES, mat.get("drainage"))  # V26.1.9: short / long term behaviour
+        add(f"drainage:{mat['name']}", "soil", f"Soil material · {mat['name']}", f"{mat['name']} drainage type",
+            f"{mat['name']}.DrainageType", "", dcur, kind="values", values=list(DRAINAGE_TYPES))
         if any(p.get(k) for k in STIFF_PROPS):  # the whole stiffness set scaled together (ratios kept valid)
             add(f"stiff:{mat['name']}", "soil", f"Soil material · {mat['name']}",
                 f"{mat['name']} stiffness set × (E50, Eoed, Eur, G0 together)", f"{mat['name']}.StiffnessFactor", "×", 1.0)
@@ -775,6 +872,7 @@ def candidates(m: dict) -> list[dict]:
                 continue
             add(f"load:{ld['name']}.{prop}", "structures", "Loads", f"{ld['name']} {short}",
                 f"{ld['name']}.{prop}", LOAD_UNIT.get((v, ld["kind"]), ""), ld["props"][prop])
+    p1_structures(m, add)
     for ld in m["loads"]:  # the surcharge area: its edges (reduce / extend it) and each corner, even off the model points
         cs = ld.get("points") or []
         if ld["kind"] == "point" or len(cs) < 2:
@@ -839,6 +937,8 @@ def candidates(m: dict) -> list[dict]:
             add(f"water:{b['name']}.Head", "flow", "Groundwater", f"Groundwater head at {b['name']}",
                 f"{b['name']}.Head", "m", b["head"])
 
+    p1_flow(m, add)
+
     # Staged construction: phase settings and the values that change per phase
     ids = {ph["name"]: ph.get("id") or ph["name"] for ph in m["phases"]}
     for ph in m["phases"]:
@@ -846,10 +946,132 @@ def candidates(m: dict) -> list[dict]:
             add(f"phase:{ph['name']}.{prop}", "stages", f"Phase · {ph.get('id') or ph['name']}",
                 f"{ph['name']} {label_of(prop)}", f"{ph['name']}.{prop}", unit_of(prop, "phase", v), val)
     for sv in m.get("staged") or []:
-        add(f"staged:{sv['object']}.{sv['prop']}@{sv['phase']}", "stages", f"Phase · {ids.get(sv['phase'], sv['phase'])}",
-            f"{sv['object']} {label_of(sv['prop']) if sv['prop'] == 'PrestressForce' else sv['prop']} in {sv['phase']}",
+        named = sv["prop"] in ("PrestressForce", "Cref", "Qwell", "h") or sv.get("kind") in ("well", "drain", "contraction")
+        add(f"staged:{sv['object']}.{sv['prop']}@{sv['phase']}",
+            "flow" if sv.get("kind") in ("well", "drain") else "stages", f"Phase · {ids.get(sv['phase'], sv['phase'])}",
+            f"{sv['object']} {label_of(sv['prop']) if named else sv['prop']} in {sv['phase']}",
             f"{sv['object']}.{sv['prop']}@{sv['phase']}", sv.get("unit", ""), sv["value"])
+    p1_stages(m, add)
     return out
+
+
+# ---------------------------------------------------------------------------------------------------------------
+# V26.1.9: the P1 features of the QA/QC report for missing features (excavation and wall design like UA-22)
+def _code_value(values: list[str], current) -> str:
+    """The 'label: code' entry of a values list matching what PLAXIS returned (a code or a name)."""
+    cur = str(current if current is not None else "").strip().lower()
+    for x in values:
+        lab, _, code = x.rpartition(": ")
+        if cur and (cur == code or cur == lab.lower() or cur.replace(" ", "") == lab.lower().replace(" ", "").replace("(", "").replace(")", "")):
+            return x
+    return values[0]
+
+
+def _stage_phases(m: dict) -> list[dict]:
+    """The construction stages (not the initial phase, not a safety phase)."""
+    return [ph for ph in (m.get("phases") or [])[1:] if "safety" not in f"{ph.get('type', '')} {ph.get('id', '')}".lower()]
+
+
+def host_of(m: dict, pts: list) -> str:
+    """The structure an interface lies along (same corner points), for its label."""
+    key = lambda q: tuple(round(float(x), 4) for x in list(q)[:3])
+    mine = {key(q) for q in pts or []}
+    for st in m.get("structures") or []:
+        if mine and mine <= {key(q) for q in st.get("points") or []}:
+            return st["name"]
+    return ""
+
+
+def soil_at(m: dict, pts: list) -> str:
+    """The soil material at the mid level of a structure (first borehole): the interface's 'adjacent soil'."""
+    if not pts or not m.get("boreholes"):
+        return ""
+    vi = 2 if m.get("version") == "3d" else 1
+    lv = [float(q[vi]) for q in pts if len(q) > vi]
+    mid = (min(lv) + max(lv)) / 2 if lv else 0.0
+    for lay in m["boreholes"][0].get("layers") or []:
+        if lay["bottom"] - 1e-9 <= mid <= lay["top"] + 1e-9:
+            return lay.get("material") or ""
+    return ""
+
+
+def p1_structures(m: dict, add) -> None:
+    """Prestress per anchor row and stage, interface objects (own Rinter and virtual thickness), tunnel contraction."""
+    ids = {ph["name"]: ph.get("id") or ph["name"] for ph in m.get("phases") or []}
+    stages = _stage_phases(m)
+    rows: dict[str, list] = {}
+    for st in m.get("structures") or []:
+        if st["kind"] == "anchor":
+            rows.setdefault(st.get("material") or st["name"], []).append(st)
+    for mat, anchors in rows.items():
+        active = [n for a in anchors for n in a.get("active") or []]
+        first = next((i for i, ph in enumerate(stages) if ph["name"] in active), 0 if not active else None)
+        if first is None:
+            continue
+        for ph in stages[first:]:
+            mine = lambda o: any(o == a["name"] or o.startswith(a["name"] + "_") for a in anchors)
+            cur = next((sv["value"] for sv in m.get("staged") or [] if sv["prop"] == "PrestressForce"
+                        and sv["phase"] == ph["name"] and mine(sv["object"])), 0.0)
+            n = len(anchors)
+            add(f"prestress:{mat}@{ph['name']}", "stages", f"Anchor prestress · row {mat}",
+                f"Anchor row {mat} ({n} anchor{'s' if n > 1 else ''}) prestress in {ids.get(ph['name'], ph['name'])}",
+                "; ".join(f"{a['name']}.PrestressForce@{ph['name']}" for a in anchors), "kN", float(cur))
+    for itf in m.get("interfaces") or []:
+        host = host_of(m, itf.get("points"))
+        base = itf.get("material") if "custom" in str(itf.get("mode") or "").lower() and itf.get("material") else soil_at(m, itf.get("points"))
+        bmat = next((x for x in m.get("materials") or [] if x["name"] == base), {})
+        grp = f"Interface · {itf['name']}" + (f" along {host}" if host else "")
+        for prop, lab, unit, dflt in (("Rinter", "strength reduction Rinter", "-", 1.0), ("DeltaInter", "virtual thickness factor δinter", "-", 0.1)):
+            cur = (bmat.get("props") or {}).get(prop, dflt)
+            add(f"iface:{itf['name']}.{prop}", "structures", grp, f"{itf['name']}{' (' + host + ')' if host else ''} own {lab}",
+                f"{itf['name']}|{base}.iface{prop}", unit, float(cur))
+    for c in m.get("contractions") or []:
+        if c.get("value") is not None and not any(sv["object"] == c["name"] for sv in m.get("staged") or []):
+            add(f"contraction:{c['name']}", "structures", "Tunnel contraction (volume loss)", f"{c['name']} contraction Cref",
+                f"{c['name']}.Cref", "%", float(c["value"]))
+
+
+def p1_flow(m: dict, add) -> None:
+    """Water level per stage (dewatering steps), cluster water conditions, groundwater flow calculation, wells and
+    drains (dewatering design)."""
+    ids = {ph["name"]: ph.get("id") or ph["name"] for ph in m.get("phases") or []}
+    v = m.get("version")
+    head = next((b["head"] for b in m.get("boreholes") or [] if b.get("head") is not None), None)
+    if head is None and m.get("water"):
+        q = (m["water"][0].get("points") or [[0, 0, 0]])[0]
+        head = float(q[2] if v == "3d" else q[1])
+    for ph in _stage_phases(m):
+        add(f"wlevel:@{ph['name']}", "flow", "Water level per stage (dewatering)",
+            f"Phreatic level in {ids.get(ph['name'], ph['name'])} (horizontal, whole model)", f"WaterLevel.level@{ph['name']}",
+            "m", float(head if head is not None else 0.0))
+    clusters = m.get("clusters") or [p["name"] for p in m.get("soil_polygons") or []]
+    if len(clusters) <= 60:
+        for ph in _stage_phases(m):
+            for cl in clusters:
+                add(f"wcond:{cl}@{ph['name']}", "flow", f"Cluster water conditions · {ids.get(ph['name'], ph['name'])}",
+                    f"{cl} water condition in {ph['name']}", f"{cl}.WaterCondition@{ph['name']}", "",
+                    CLUSTER_CONDITIONS[0], kind="values", values=list(CLUSTER_CONDITIONS))
+    for ph in (m.get("phases") or []):
+        if "safety" in f"{ph.get('type', '')} {ph.get('id', '')}".lower():
+            continue
+        add(f"pore:{ph['name']}", "flow", "Groundwater flow calculation",
+            f"Pore pressure calculation in {ids.get(ph['name'], ph['name'])}", f"{ph['name']}.PorePresCalcType", "",
+            _code_value(PORE_TYPES, ph.get("pore")), kind="values", values=list(PORE_TYPES))
+    staged = {sv["object"] for sv in m.get("staged") or [] if sv.get("kind") in ("well", "drain")}
+    for coll, lab, unit in (("wells", "discharge |Qwell|", "m³/day"), ("drains", "head h", "m")):
+        for w in m.get(coll) or []:
+            if w["name"] in staged:
+                continue  # its stage values are offered under the stages (Phase · ...)
+            for ph in _stage_phases(m):
+                add(f"{coll[:-1]}:{w['name']}@{ph['name']}", "flow", f"{'Wells' if coll == 'wells' else 'Drains'} (dewatering design)",
+                    f"{w['name']} {lab} in {ids.get(ph['name'], ph['name'])}", f"{w['name']}.{w.get('prop') or ('Qwell' if coll == 'wells' else 'h')}@{ph['name']}",
+                    unit, float(w.get("value") or 0.0))
+
+
+def p1_stages(m: dict, add) -> None:
+    """The design approach of a run (EC7 partial factors on variable loads and soil strength)."""
+    add("design:approach", "stages", "Design approach (EC7 partial factors)", "Design approach of the run",
+        "Design.approach", "", DESIGN_APPROACHES[0], kind="values", values=list(DESIGN_APPROACHES))
 
 
 def apply_inputs(m: dict, variables: list[dict], inputs: dict) -> tuple[dict, list[dict], list[str]]:
@@ -1192,6 +1414,10 @@ def _svg3d(m, labels, selected, view="iso"):
 # ---------------------------------------------------------------------------------------------------------------
 # Results that can be extracted at every run (PLAXIS Output, g_o.ResultTypes.<Group>.<Type>, max absolute value at
 # nodes; "| Y = max" keeps the nodes at the top of the model, e.g. surface settlement).
+BASIC_KEYS = ("fos", "utot", "ux", "uv", "settle", "wall_ux", "plate_m", "plate_q", "plate_n", "anchor", "pile_n", "pexcess",
+              "file")  # the results of the full run of the Original File (V26.1.8)
+
+
 def outputs(version: str) -> list[dict]:
     is3 = version == "3d"
     up = "Z" if is3 else "Y"
@@ -1210,8 +1436,24 @@ def outputs(version: str) -> list[dict]:
         ("pile_n", "Max embedded beam axial force", "EmbeddedBeam.N" if is3 else "EmbeddedBeamRow.Nx2D",
          "kN", "", "report", None),
         ("pexcess", "Max excess pore pressure", "Soil.PExcess", "kN/m²", "", "report", None),
+        # V26.1.9 (QA/QC missing features, P1): structure results, groundwater flow and the surface trough
+        ("geogrid_n", "Max geogrid (grout body) axial force", "Geogrid.N1" if is3 else "Geogrid.Nx2D", "kN/m", "", "report", None),
+        ("skin", "Max embedded beam skin friction", "EmbeddedBeam.Tskin" if is3 else "EmbeddedBeamRow.Tskin2D", "kN/m", "", "report", None),
+        ("iface_sn", "Max interface effective normal stress", "Interface.InterfaceEffectiveNormalStress", "kN/m²", "", "report", None),
+        ("iface_tau", "Max interface shear stress", "Interface.InterfaceShearStress", "kN/m²", "", "report", None),
+        ("iface_rel", "Max interface relative shear stress (mobilised)", "Interface.InterfaceRelativeShearStress", "-", "", "report", None),
+        ("q", "Max specific discharge |q|", "Soil.Qtot", "m/day", "", "report", None),
+        ("head", "Max groundwater head", "Soil.GroundwaterHead", "m", "", "report", None),
+        ("psteady", "Max steady-state pore pressure", "Soil.PSteady", "kN/m²", "", "report", None),
+        ("pactive", "Max active pore pressure", "Soil.PActive", "kN/m²", "", "report", None),
+        ("trough", "Surface settlement trough volume Vs" + (" (section at mid y)" if is3 else ""),
+         f"Soil.U{up.lower()}|trough", "m³/m", "", "report", None),
         ("file", "PLAXIS project file of the run", "file", "", "", "report", None),
     ]
+    if is3:  # 3D beams: the capping beam / waling forces
+        o[-1:-1] = [("beam_n", "Max beam axial force (capping beam)", "Beam.N", "kN", "", "report", None),
+                    ("beam_m", "Max beam bending moment (capping beam)", "Beam.M2", "kN·m", "", "report", None),
+                    ("beam_m3", "Max beam bending moment M3 (capping beam)", "Beam.M3", "kN·m", "", "report", None)]
     return [{"key": k, "label": lab, "result": res, "unit": u, "phase_hint": ph, "operator": op, "value": val}
             for k, lab, res, u, ph, op, val in o]
 

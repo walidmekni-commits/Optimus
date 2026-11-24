@@ -1230,7 +1230,9 @@ def basic_run(pid: str):
 
 def _basic_plan(p: dict, example: bool, targets: list[dict] | None = None) -> dict:
     m = (p["setup"] or {}).get("plaxis_model") or {}
-    outs = [o for o in plaxis_model.outputs(p["setup"].get("plaxis") or "2d") if o["key"] != "file"]
+    # V26.1.9: the full run reads the main results of V26.1.8 only; the results added for the missing features
+    # (interfaces, flow, trough, beams) are chosen in the studies, so the full run of a 3D model stays as long as before
+    outs = [o for o in plaxis_model.outputs(p["setup"].get("plaxis") or "2d") if o["key"] != "file" and o["key"] in plaxis_model.BASIC_KEYS]
     targets = targets or ([{"name": f"T{i}", "label": o["label"], "result": o["result"], "phase": study._phase_for(o, m),
                             "operator": "report", "value": None, "unit": o["unit"], "key": o["key"]} for i, o in enumerate(outs, 1)]
                           + _stage_targets(outs, m))
@@ -1363,7 +1365,7 @@ def get_study(pid: str):
                     (p["objective"] if p["objective"] in study.MODES else "sensitivity"))
     out = {"study": s, "modes": study.MODES}
     if m:
-        out |= {"catalog": _catalog_units(study.catalog(m), p["setup"]), **_study_preview(m, s)}
+        out |= {"catalog": _catalog_units(study.catalog(m, s), p["setup"]), **_study_preview(m, s)}
     return out
 
 
@@ -1391,7 +1393,8 @@ def put_study(pid: str, body: dict):
     s = study.clean(body)
     db.update_project(pid, setup={**p["setup"], "study": s})
     m = (p["setup"] or {}).get("plaxis_model")
-    return {"study": s, **(_study_preview(m, s) if m else {})}
+    # V26.1.9: the study's PLAXIS features (new structures, points, dynamics) add inputs and results to the catalog
+    return {"study": s, **({**_study_preview(m, s), "catalog": _catalog_units(study.catalog(m, s), p["setup"])} if m else {})}
 
 
 @app.post("/api/projects/{pid}/study/run")
@@ -1483,6 +1486,10 @@ def _start_study_task(p, s, variables, targets, runs, first, offset, previous):
     plan_data = {"variables": variables, "targets": targets, "goal": None, "output": report.output_options(p["setup"]),
                  "plaxis": p["setup"].get("plaxis") or "2d", "study": s, "first": first, "offset": offset,
                  "previous": previous}
+    m = (p["setup"] or {}).get("plaxis_model")
+    if m:  # V26.1.9: what PLAXIS adds in every run (safety phases after chosen stages, new structures, a dynamic phase)
+        from . import features
+        plan_data["features"] = features.solver_options(m, s)
     # V26.1.8: a Soft Soil Creep study calculates every run, Run 0 included, with gravity loading in the initial
     # phase: the full run of the Original File (K0 procedure) is then not comparable and is not taken over
     if any(not (r.get("inputs") or {}) for r in runs) and not study.needs_gravity_initial({"variables": variables}, runs):

@@ -14,7 +14,7 @@ summary, a table of three columns and figures. Excel and Word files are made by 
 """
 import math
 
-from . import geocheck, geosel, plaxis_model
+from . import features, geocheck, geosel, plaxis_model
 from .planner import numeric, parse_value, show
 
 MODES = {
@@ -34,7 +34,7 @@ MODES = {
 DOMAINS = {"geometry": "Geometry", "structures": "Structures", "loads": "Loads", "soil": "Soil",
            "water": "Water conditions", "mesh": "Mesh", "stages": "Stages"}
 OUT_DOMAINS = {"safety": "Safety", "displacements": "Displacements", "forces": "Structural forces",
-               "water": "Pore pressure"}
+               "water": "Pore pressure and flow", "points": "Results at chosen points", "dynamics": "Dynamics"}
 OPERATORS = [">=", "<=", ">", "<"]
 
 
@@ -76,14 +76,24 @@ def out_domain(key: str) -> str | None:
         return "forces"
     if key == "pexcess":
         return "water"
-    return None
+    return features.out_domain(key)  # V26.1.9
 
 
-def catalog(m: dict) -> dict:
+def all_candidates(m: dict, s: dict | None = None) -> list[dict]:
+    """The model's input parameters and those of the study's PLAXIS features (V26.1.9: new structures, dynamics)."""
+    return plaxis_model.candidates(m) + features.candidates(m, s or {})
+
+
+def all_outputs(m: dict, s: dict | None = None) -> list[dict]:
+    """PLAXIS' results and those of the study's features (V26.1.9: results at chosen points, volume loss, dynamics)."""
+    return plaxis_model.outputs(m["version"]) + features.outputs(m, s or {})
+
+
+def catalog(m: dict, s: dict | None = None) -> dict:
     """Everything the study page offers: the model's input parameters and PLAXIS' outputs, by domain."""
     params = []
     kinds = {o["name"]: o for o in plaxis_model.objects(m)}
-    for c in plaxis_model.candidates(m):
+    for c in all_candidates(m, s):
         p = {"key": c["key"], "label": c["label"], "unit": c.get("unit") or "", "current": c["current"],
              "kind": c["kind"], "domain": domain_of(c), "group": c["group"], "ref": c["plaxis_ref"]}
         gk = geo_kind(c, m, kinds)
@@ -98,10 +108,15 @@ def catalog(m: dict) -> dict:
         if c["kind"] == "values":  # the soil model (V26.1.8)
             p["values"] = c.get("values") or []
         params.append(p)
-    outs = [{**o, "domain": out_domain(o["key"])} for o in plaxis_model.outputs(m["version"]) if out_domain(o["key"])]
+    outs = [{**o, "domain": out_domain(o["key"])} for o in all_outputs(m, s) if out_domain(o["key"])]
     phases = [{"name": name, "label": lab, "day": d} for name, (d, lab) in schedule(m, {}).items()]
+    allph = [{"name": ph["name"], "label": ph.get("id") or ph["name"], "type": ph.get("type") or ""}
+             for ph in (m.get("phases") or [])]
+    mats = [{"name": x["name"], "id": x.get("id") or x["name"], "kind": x["kind"]} for x in m.get("materials") or []]
     return {"modes": MODES, "domains": DOMAINS, "out_domains": OUT_DOMAINS, "operators": OPERATORS,
-            "params": params, "outputs": outs, "phases": phases}
+            "params": params, "outputs": outs, "phases": phases, "all_phases": allph, "materials": mats,
+            "loads": [x["name"] for x in m.get("loads") or []], "kinds": features.KINDS,
+            "has": {k: len(m.get(k) or []) for k in ("interfaces", "tunnels", "contractions", "wells", "drains")}}
 
 
 def default(mode: str) -> dict:
@@ -195,6 +210,8 @@ def _encode(var: dict, val):
 
 
 def _phase_for(o: dict, m: dict) -> str:
+    if o.get("phase_hint") == "dynamic":
+        return features.DYNAMIC_PHASE
     if o.get("phase_hint") == "safety":
         return next((ph["name"] for ph in m.get("phases") or [] if "safety" in f"{ph.get('type', '')} {ph.get('id', '')}".lower()), "")
     return ""
@@ -203,12 +220,12 @@ def _phase_for(o: dict, m: dict) -> str:
 def build(m: dict, study: dict) -> dict:
     """Variables, targets and runs of the study, the scheduled runs (3 columns) and what is still missing."""
     s = clean(study)
-    cands = {c["key"]: c for c in plaxis_model.candidates(m)}
+    cands = {c["key"]: c for c in all_candidates(m, s)}
     for e in s.get("geo") or []:  # geometry selected in the 3D view (app.geosel)
         c = geosel.candidate(m, e, e.get("mode") or "x")
         if c:
             cands[c["key"]] = c
-    outs = {o["key"]: o for o in plaxis_model.outputs(m["version"])}
+    outs = {o["key"]: o for o in all_outputs(m, s)}
     errors, variables, params, warnings = [], [], [], []
     geo = {"grp:" + e["id"]: e for e in s.get("geo") or [] if e.get("id")}
     screen = s.get("screen") or {}
@@ -336,7 +353,7 @@ def build(m: dict, study: dict) -> dict:
                 at(sr["output"], dd, name, lab, {"measured": v, "read_day": d})
         done = {sr["output"] for sr in series}
         keys = [k for k in (tm.get("outputs") or list(dict.fromkeys(t["key"] for t in targets if not t.get("time"))))
-                if k in outs and k not in ("fos", "file") and k not in done]
+                if k in outs and k not in ("fos", "file") and k not in done and not k.startswith("dyn_")]
         if tm.get("on"):
             for key in keys:
                 for d, name, lab in dates:
@@ -345,7 +362,23 @@ def build(m: dict, study: dict) -> dict:
             errors[:] = [e for e in errors if "measured result" not in e]
     # QA V26.1.8: a factor of safety needs a safety phase. Without one PLAXIS gives ΣMsf = 1 for the last phase, which
     # was reported as "FoS 1" (reporting) or failed every optimization run after 10 minutes of calculation.
-    has_safety = any("safety" in f"{ph.get('type', '')} {ph.get('id', '')}".lower() for ph in m.get("phases") or [])
+    # V26.1.9: a safety phase added by OPTIMUS after chosen stages: the factor of safety of each of those stages
+    fo = features.clean(s)
+    after = [ph for ph in (m.get("phases") or []) if ph["name"] in fo["safety"]["after"]]
+    if after:
+        fos = [t for t in targets if t["key"] == "fos" and not t.get("time")]
+        proto = fos[0] if fos else None
+        targets[:] = [t for t in targets if not (t["key"] == "fos" and not t.get("time"))]
+        o = outs["fos"]
+        for ph in after:
+            targets.append({"name": f"T{len(targets) + 1}", "label": f"{o['label']} after {ph.get('id') or ph['name']}",
+                            "result": o["result"], "phase": features.SAFETY_PHASE + ph["name"],
+                            "operator": proto["operator"] if proto else "report", "value": proto.get("value") if proto else None,
+                            "unit": o["unit"], "key": "fos", "stage": True, "safety_after": ph["name"],
+                            **({k: proto[k] for k in ("how", "ref", "lo", "hi", "control", "measured", "detector") if k in proto} if proto else {})})
+        for i, t in enumerate(targets, 1):
+            t["name"] = f"T{i}"
+    has_safety = bool(after) or any("safety" in f"{ph.get('type', '')} {ph.get('id', '')}".lower() for ph in m.get("phases") or [])
     if m.get("phases") and not has_safety and any(t["key"] == "fos" for t in targets):
         if any(t["key"] == "fos" and t["operator"] != "report" for t in targets) or mode == "calibration":
             errors.append("The factor of safety needs a safety phase, and this model has none: add a safety phase in "
@@ -419,6 +452,10 @@ def build(m: dict, study: dict) -> dict:
             runs.append({"label": f"Scenario {k + 1}", "inputs": {var["name"]: _encode(var, v) for (var, _), v in zip(cols, combo)}})
     else:  # optimization (together, n runs) and scenarios (n scenarios)
         cols = [(var, param_values(p, var, max(0, n_var), s["distribution"])) for p, var in params]
+        # V26.1.9: a variable with fewer values than runs (e.g. "not added / added" in 4 runs) spreads its values over
+        # the runs (it gave fewer values than runs, and the runs after them failed with an IndexError)
+        cols = [(var, vals if len(vals) >= n_var or not vals else
+                 [vals[round(k * (len(vals) - 1) / max(1, n_var - 1))] for k in range(n_var)]) for var, vals in cols]
         for k in range(max(0, n_var)):
             ins = {var["name"]: _encode(var, vals[k]) for var, vals in cols if vals[k] is not None}
             if ins:

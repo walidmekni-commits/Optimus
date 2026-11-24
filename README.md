@@ -1,5 +1,27 @@
 # PLAXIS AI Design Automation
 
+## OPTIMUS® V26.1.9 (missing PLAXIS features, batch 1: the P1 items for excavation and wall design)
+
+From the QA/QC *Report for Missing Features* (24 Nov 2026). The 13 P1 items, available in every module:
+
+- **Tunnels**: Tunnel objects and contractions (line / surface) are read; the contraction Cref is a variable (per stage when staged); lining thickness and face pressure through the plate material and the face load. New results: the **surface settlement trough volume Vs** (3D: the section at mid y) and the **volume loss VL** = Vs / (π D² / 4) once the tunnel diameter is given.
+- **New structures**: an anchor row, a strut level, a plate, a geogrid, an embedded beam (3D: also a beam) drawn from two points (*PLAXIS features of the study › New structures*), with its material, the stage it is active from and an anchor prestress. Each one is a variable (not added / added) with its level shift.
+- **Anchor prestress per anchor row and stage**: the anchors of one material form a row; its prestress is offered from the first stage the row is active (Adjust prestress is switched on in that stage).
+- **Interface objects**: each interface (positive / negative) is read with the structure it lies along; its own Rinter and virtual thickness factor δinter are variables (a custom interface material copied from its material or from the adjacent soil, so the soil and the other interfaces keep theirs).
+- **Structure results**: geogrid (grout body) force, embedded beam skin friction, interface effective normal stress, shear stress and relative shear stress, 3D beam (capping beam) N, M2, M3.
+- **Water level per stage**: a horizontal phreatic level over the whole model per stage (dewatering steps), and the water condition of each soil cluster per stage (Global level, Dry, Interpolate; up to 60 clusters).
+- **Groundwater flow calculation**: the pore pressure calculation type of each phase (Phreatic, Steady-state groundwater flow, from the previous phase); results: max specific discharge |q|, groundwater head, steady and active pore pressure.
+- **Wells and drains**: read with their discharge / head; each stage's well discharge and drain head are variables.
+- **Drainage type**: Drained, Undrained (A), (B), (C), Non-porous per soil material (short / long term).
+- **Adding a safety phase**: *Factor of safety per stage* adds a safety phase after each ticked stage in every run (Run 0 included) and reads ΣMsf for each.
+- **Design approaches**: a variable per run: characteristic, EC7 DA1-C1, DA1-C2, DA2*, DA3. OPTIMUS applies the partial factors itself (variable loads × γQ, tan φ' / γφ', c' / γc', su / γcu; DA1-C1 and DA2*: structural forces × 1.35 on the effects), listed in the run's soil_models.txt.
+- **Results at chosen points**: points typed or taken from the model (e.g. a building corner) give |u|, ux and uz (2D: uy) at the point; with *Results over time*, at every stage.
+- **Dynamic loads**: a dynamic phase after a chosen stage, harmonic, on a chosen load or as a shaking of the model base, with viscous boundaries; amplitude, frequency and duration are variables; results: ax, vx and ux in the dynamic phase. Needs PLAXIS with the Dynamics module.
+
+Also: what each run set in the stages is kept in stages_applied.txt; a variable with fewer values than runs (e.g. not added / added in 4 runs) spreads its values over the runs (it stopped the study with an error). The full run of the Original File reads the same results as V26.1.8 (the new results are chosen in the studies).
+
+**Through the PLAXIS scripting API, with limits**: earthquake records (table signals) are not in this batch (harmonic only); tunnel round length and support delay are not variables (the Tunnel Designer's excavation sequence is not reachable as single values through the scripting server); the total inflow into an excavation through a cross-section is not given by the scripting server (the max specific discharge and the well discharges are). The PLAXIS commands were written from the PLAXIS 2D / 3D reference manuals and checked with a simulated PLAXIS; each feature needs one check on PLAXIS 3D 2024.3 / 2025.1 (QA/QC).
+
 ## OPTIMUS® V26.1.8 (QA/QC review of the five study modules)
 
 - **PLAXIS 3D results are read again**: PLAXIS Output is opened with the security it really has (secured or not); before, a secured request to an unsecured Output server failed on every result ("Syntax of request could not be understood") and the study still said "succeeded". PLAXIS 3D 2024 names are used (wall axial force `Plate.N11`, anchor force `NodeToNodeAnchor.N`), with alternatives for other versions.
