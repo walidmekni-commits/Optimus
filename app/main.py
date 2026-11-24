@@ -1588,6 +1588,10 @@ def _study_results(tid: str, swap: int | None = None):
         for r in runs + prev:
             r["outputs"] = {k: (units.to_display(v, tg[k].get("unit") or "", setup)[0] if k in tg else v)
                             for k, v in (r.get("outputs") or {}).items()}
+            prof = (r.get("outputs") or {}).get("_profiles")
+            if isinstance(prof, dict):  # V26.1.9 (batch 2): the profile values in the chosen unit (the distance in m)
+                r["outputs"]["_profiles"] = {k: [[a, units.to_display(b, tg[k].get("unit") or "", setup)[0]] for a, b in pts]
+                                             for k, pts in prof.items() if k in tg}
         t["plan"]["targets"] = _targets_to_display(t["plan"]["targets"], setup)
     out = study.results(t, runs, prev)
     allruns = prev + runs

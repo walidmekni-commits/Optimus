@@ -54,6 +54,28 @@ def figure(spec: dict) -> bytes:
         ax.set_xlabel("Time (days)")
         ax.set_ylabel(f"{t['label']}{_unit(t)}")
         ax.legend(loc="best", fontsize=7.5)
+    elif k == "profile":  # V26.1.9 (batch 2): the settlement trough / wall deflection along its line, one line per run
+        t = spec["target"]
+        cmap = plt.get_cmap("viridis")
+        n = max(1, len(spec["series"]) - 1)
+        wall = spec.get("along") == "wall"
+        for i, s in enumerate(spec["series"]):
+            pts = s["points"]
+            if not pts:
+                continue
+            col = ORANGE if s.get("existing") else (RED if s.get("best") else cmap(i / n * 0.85))
+            xs, ys = [p[0] for p in pts], [p[1] for p in pts]
+            ax.plot(ys, xs, "-", color=col, lw=2.4 if s.get("best") else 1.4, label=s["label"]) if wall else \
+                ax.plot(xs, ys, "-", color=col, lw=2.4 if s.get("best") else 1.4, label=s["label"])
+        if wall:
+            ax.set_xlabel(f"{t['label'].split(' (')[0]}{_unit(t)}")
+            ax.set_ylabel("Level (m)")
+            ax.axvline(0, color="#9aa59c", lw=0.8)
+        else:
+            ax.set_xlabel("Distance x (m)")
+            ax.set_ylabel(f"{t['label'].split(' (')[0]}{_unit(t)}")
+            ax.axhline(0, color="#9aa59c", lw=0.8)
+        ax.legend(loc="best", fontsize=7.5)
     elif k == "sensitivity":
         v, t = spec["var"], spec["target"]
         pts = sorted(spec["points"], key=lambda p: (str(p[0]) if isinstance(p[0], str) else p[0]))

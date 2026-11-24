@@ -34,7 +34,8 @@ MODES = {
 DOMAINS = {"geometry": "Geometry", "structures": "Structures", "loads": "Loads", "soil": "Soil",
            "water": "Water conditions", "mesh": "Mesh", "stages": "Stages", "thermal": "Thermal"}
 OUT_DOMAINS = {"safety": "Safety", "displacements": "Displacements", "forces": "Structural forces",
-               "water": "Pore pressure and flow", "points": "Results at chosen points", "dynamics": "Dynamics"}
+               "water": "Pore pressure and flow", "points": "Results at chosen points", "dynamics": "Dynamics",
+               "thermal": "Thermal"}
 OPERATORS = [">=", "<=", ">", "<"]
 
 
@@ -979,7 +980,7 @@ def detector(plan: dict, stats: list[dict], runs: list[dict]) -> list[dict]:
     rows = [{**st, "driver": drivers.get(st["label"], ("", 0))[0], "key": keys.get(st["label"]),
              "control": keys.get(st["label"]) in ctl} for st in stats if st.get("spread") is not None]
     rows.sort(key=lambda r: -abs(r["spread"]))
-    return rows[:10]
+    return rows[:10] + [r for r in rows[10:] if r["control"]]  # V26.1.9: the control parameters are always shown
 
 
 def screening_rank(plan: dict, runs: list[dict]) -> list[dict]:
@@ -1248,6 +1249,19 @@ def chart_specs(task: dict, out: dict, runs_all: list[dict]) -> list[dict]:
                               "points": pts, "best": gv["governing_run"] if gv else None, "scenario": mode == "combinations"})
     best = (out.get("calibration") or {}).get("best_run") if mode == "calibration" else \
         (out.get("optimization") or {}).get("best_run") if mode == "optimize" else None
+    for t in plan["targets"]:  # V26.1.9 (batch 2): the settlement / wall deflection profile, one line per run
+        if "|profile" not in (t.get("result") or "") or t.get("time"):
+            continue
+        rs = [r for r in runs_all if r["status"] == "succeeded" and ((r.get("outputs") or {}).get("_profiles") or {}).get(t["name"])]
+        if not rs:
+            continue
+        keep = rs if len(rs) <= 8 else [r for i, r in enumerate(rs) if i == 0 or r["no"] == best or i % max(1, len(rs) // 7) == 0][:9]
+        specs.append({"kind": "profile", "title": t["label"].split(" (max")[0] + " in " +
+                      ("every run" if len(keep) == len(rs) else f"{len(keep)} of the {len(rs)} runs"),
+                      "target": t, "along": "wall" if "profile:wall" in t["result"] else "surface",
+                      "series": [{"label": f"Run {r['no']}" + (" (existing design)" if not r.get("inputs") else ""),
+                                  "run": r["no"], "points": r["outputs"]["_profiles"][t["name"]], "best": r["no"] == best,
+                                  "existing": not r.get("inputs")} for r in keep]})
     for ts in out.get("time") or []:  # V26.1.8: each result over time, one line per run (+ the field readings)
         specs.append({"kind": "time", "title": f"{ts['label']} over time" + (" against the field readings" if ts["measured"] else ""),
                       "target": {"label": ts["label"], "unit": ts["unit"]}, "measured": ts["measured"],

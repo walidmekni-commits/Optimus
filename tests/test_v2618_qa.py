@@ -144,7 +144,7 @@ def test_soil_model_stiffness_set_and_curated_soil_parameters():
         "E50Ref": 38000.0, "EOedRef": 38000.0, "EURRef": 114000.0, "pRef": 100.0, "ClayFraction": 10.0, "cK": 1e15, "phi": 34.0}})
     cat = {c["key"]: c for c in study.catalog(m)["params"]}
     sm = cat["smodel:L2Sand"]
-    assert sm["values"] == pm.SOIL_MODELS and sm["domain"] == "soil"
+    assert sm["values"] == pm.SOIL_MODELS_P2 and sm["domain"] == "soil"  # V26.1.9 (P2): Soft Soil and MCC added
     assert abs(cat["sscmu:L2Sand"]["current"] - 100 / 38000 / 25) < 1e-6 and "stiff:L2Sand" in cat
     assert "mat:L2Sand.ClayFraction" not in cat and "mat:L2Sand.cK" not in cat and cat["mat:L2Sand.E50Ref"]["unit"] == "kN/m²"
     v = pm.variable_from({**sm, "plaxis_ref": sm["ref"], "section": "soil"}, "p1", "3d")

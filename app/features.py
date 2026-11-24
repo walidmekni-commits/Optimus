@@ -147,6 +147,10 @@ def out_domain(key: str) -> str | None:
         return "displacements"
     if key.startswith("dyn_"):
         return "dynamics"
+    if key in ("settle_profile", "wall_profile"):  # V26.1.9 (batch 2)
+        return "displacements"
+    if key == "temp":
+        return "thermal"
     return None
 
 

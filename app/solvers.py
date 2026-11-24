@@ -1,6 +1,7 @@
 """Solver backends. 'plaxis' drives PLAXIS 2D/3D through its remote scripting server; 'simulated' fakes the
 results so the whole workflow can be tried and tested without PLAXIS."""
 import hashlib
+import math
 import json
 import random
 import re
@@ -46,6 +47,21 @@ def check_data_folder(path: Path) -> None:
 
 class SolverError(RuntimeError):
     pass
+
+
+def hoek_brown_mc(sci: float, gsi: float, mi: float, d: float = 0.0, s3max: float | None = None) -> tuple[float, float, str]:
+    """V26.1.9 (P2): the Mohr-Coulomb c' (kN/m²) and φ' (°) equivalent to a Hoek-Brown rock mass over 0 < σ3 < σ3max
+    (Hoek, Carranza-Torres & Corkum 2002), σ3max = σci / 4 unless given."""
+    mb = mi * math.exp((gsi - 100) / (28 - 14 * d))
+    s_ = math.exp((gsi - 100) / (9 - 3 * d))
+    a = 0.5 + (math.exp(-gsi / 15) - math.exp(-20 / 3)) / 6
+    s3max = s3max if s3max is not None else sci / 4
+    n = s3max / sci
+    k = 6 * a * mb * (s_ + mb * n) ** (a - 1)
+    phi = math.degrees(math.asin(k / (2 * (1 + a) * (2 + a) + k)))
+    c = sci * ((1 + 2 * a) * s_ + (1 - a) * mb * n) * (s_ + mb * n) ** (a - 1) / \
+        ((1 + a) * (2 + a) * math.sqrt(1 + k / ((1 + a) * (2 + a))))
+    return c, phi, f"Hoek-Brown σci {sci:g}, GSI {gsi:g}, mi {mi:g}, D {d:g}, σ3max {s3max:g}: mb {mb:.4g}, s {s_:.4g}, a {a:.4g}"
 
 
 # ---------------------------------------------------------------------------
@@ -126,6 +142,16 @@ class SimulatedSolver:
                 w = self._w(res)
                 out[t.name] = round((0.4 + 1.2 * w) * (1.2 - 0.6 * s), 3) if res.split("|trough", 1)[1].startswith(":") \
                     else round((1 + 4 * w) * (1.2 - 0.6 * s), 3)
+        for t in targets:  # V26.1.9 (batch 2): the settlement / wall deflection curve of the run
+            res = t.result or ""
+            if "|profile" in res and isinstance(out.get(t.name), float):
+                peak = out[t.name]
+                if "wall" in res:
+                    pts = [[-z, round(peak * math.sin(math.pi * min(1.0, (z + 1) / 14)) * (1 - z / 40), 6)] for z in range(0, 19)]
+                else:
+                    pts = [[float(x), round(-peak * math.exp(-((x - 30) / (8 + 6 * s)) ** 2), 6)] for x in range(0, 61, 2)]
+                out.setdefault("_profiles", {})[t.name] = pts
+                out[t.name] = max(abs(b) for _, b in pts)
         applied = self._applied(inputs, variables)
         if applied:
             out["_stages_applied"] = applied
@@ -231,9 +257,10 @@ def _obj_name(o) -> str:
 
 
 from .plaxis_p1 import P1Mixin  # noqa: E402  V26.1.9: the P1 features of the QA/QC missing-features report
+from .plaxis_p2 import P2Mixin, new_p2  # noqa: E402  V26.1.9: batch 2
 
 
-class PlaxisSolver(P1Mixin):
+class PlaxisSolver(P1Mixin, P2Mixin):
     """Drives PLAXIS through its remote scripting server (Expert > Configure remote scripting server).
     Needs the `plxscripting` package that ships with PLAXIS, and this app running where it can reach PLAXIS
     (normally the same Windows PC). Each run opens the original model, applies the variables, calculates,
@@ -663,21 +690,41 @@ class PlaxisSolver(P1Mixin):
             except Exception:  # noqa: BLE001
                 return d
         pref, eoed, eur, e50, nuur = get("pRef", 100.0), get("EOedRef"), get("EURRef"), get("E50Ref"), get("nuUR", 0.2)
-        if not (eoed and eur):
-            raise SolverError(f"{name}: Eoed,ref and Eur,ref are needed to derive the {code} parameters")
-        sets = {}
-        if code == 2:
+        first = lambda *names: next((x for x in (get(n) for n in names) if x is not None), None)
+        sci, gsi = first("SigmaCi", "SigmaCI", "Sigmaci", "sigmaci"), first("GSI")
+        sets, note = {}, ""
+        if code == 2 and sci and gsi is not None:
+            # V26.1.9 (P2): Mohr-Coulomb equivalent to Hoek-Brown (Hoek, Carranza-Torres & Corkum 2002), σ3max = σci / 4
+            c, phi, info = hoek_brown_mc(sci, gsi, first("mi", "Mi") or 10.0, first("D", "Disturbance") or 0.0)
+            erm = first("ERef", "Eref", "E", "Erm", "ERm")
+            sets = {("cRef", "cref", "c"): c, ("phi", "Phi"): phi, ("psi", "Psi", "?"): 0.0}
+            if erm:
+                sets[("ERef", "Eref", "E", "?")] = erm
+            note = f" ({info})"
+        else:
+            if not (eoed and eur):
+                raise SolverError(f"{name}: Eoed,ref and Eur,ref are needed to derive the {code} parameters")
+        if code == 2 and not sets:
             sets = {("ERef", "Eref", "E"): e50 or eoed, ("nu", "Nu", "?"): 0.3}  # "?" = optional
         elif code == 4:
             g0 = get("G0Ref") or 2.5 * eur / (2 * (1 + nuur))
             sets = {("G0Ref", "G0ref"): g0, ("gamma07",): get("gamma07") or 1.5e-4}
-        elif code == 6:
+        elif code in (5, 6, 8):
             lam = pref / eoed
             # κ* from Eur is close to λ* for a stiff sand (Eur ≈ 3 Eoed), which made the K0 procedure fail in PLAXIS
             # (LogInfo -5, QA run 23 Nov); the usual SSC ratio κ*/λ* = 0.2 is used when it is smaller
             kap = min(3 * (1 - 2 * nuur) * pref / eur, 0.2 * lam)
-            m_ = mu if mu is not None else lam / 25
-            sets = {self.SSC_NAMES["lambda"]: lam, self.SSC_NAMES["kappa"]: kap, self.SSC_NAMES["mu"]: m_}
+            if code == 6:
+                m_ = mu if mu is not None else lam / 25
+                sets = {self.SSC_NAMES["lambda"]: lam, self.SSC_NAMES["kappa"]: kap, self.SSC_NAMES["mu"]: m_}
+            elif code == 5:  # V26.1.9 (P2): Soft Soil, the same λ*, κ* without creep
+                sets = {self.SSC_NAMES["lambda"]: lam, self.SSC_NAMES["kappa"]: kap}
+            else:  # V26.1.9 (P2): Modified Cam-Clay: λ = λ* (1 + e0), κ = κ* (1 + e0), M from φ' (triaxial compression)
+                e0 = first("eInit", "einit", "e0") or 1.0
+                phi = first("phi", "Phi") or 25.0
+                sp = math.sin(math.radians(phi))
+                sets = {("lambda", "Lambda"): lam * (1 + e0), ("kappa", "Kappa"): kap * (1 + e0),
+                        ("M", "MCC_M", "?"): 6 * sp / (3 - sp), ("nu", "Nu", "nuUR", "?"): min(max(nuur, 0.1), 0.35)}
         try:
             mat.setproperties("SoilModel", int(code))
         except Exception as e:  # noqa: BLE001
@@ -694,7 +741,7 @@ class PlaxisSolver(P1Mixin):
             else:
                 if "?" not in names:
                     raise SolverError(f"{name}: none of {', '.join(names)} could be set for soil model {code}")
-        return f"{name}: " + ", ".join(done)
+        return f"{name}: " + ", ".join(done) + note
 
     LONGTERM_ID = "Long term"
 
@@ -780,6 +827,7 @@ class PlaxisSolver(P1Mixin):
         # V26.1.9: features applied after the variables (water levels and conditions per stage, interfaces with their
         # own material, design approach, new structures, the dynamic load)
         levels, conds, ifaces, design, adds, dyn, staged_done = {}, [], {}, 0, {}, dict(self.dynamic or {}), []
+        p2 = new_p2()  # V26.1.9 (batch 2): slopes, staged fill / excavation, mesh refinement, phase settings
         is3 = path.suffix.lower() in (".p3d", ".p3dxml")
         first = lambda v: 0 if any(r.strip().lower().endswith((".soilmodel", ".sscmu", ".stiffnessfactor")) for r in (v.plaxis_ref or "").split(";")) else 1
         for v in sorted(variables, key=first):  # a soil model is switched before the other parameters of the run
@@ -843,6 +891,8 @@ class PlaxisSolver(P1Mixin):
                     continue
                 if pl.startswith("iface"):  # V26.1.9: the interface's own Rinter / virtual thickness
                     ifaces.setdefault(obj_name, {})[prop[5:]] = value
+                    continue
+                if self._p2_take(p2, obj_name, prop, phase, value):  # V26.1.9 (batch 2)
                     continue
                 if obj_name == "Design" and pl == "approach":  # V26.1.9: EC7 design approach
                     design = int(round(value))
@@ -915,6 +965,9 @@ class PlaxisSolver(P1Mixin):
             say(f"Drawing {len(specs)} new structure(s)", 30)
             made = self._add_structures(g_i, specs, is3)
             geometry_changed = True
+        p2_done, remesh = self._p2_geometry(g_i, p2, is3, moved)
+        soil_models += p2_done
+        geometry_changed = geometry_changed or remesh
         applied = self._check_geometry(g_i, moved)
         (run_dir / "geometry_applied.txt").write_text("\n".join(applied) or "no geometry change", encoding="utf-8")
         if geometry_changed or mesh_size is not None:  # new geometry or mesh size: re-mesh before calculating
@@ -931,6 +984,7 @@ class PlaxisSolver(P1Mixin):
             staged_done += self._water_levels(g_i, levels, is3)
         if conds:
             staged_done += self._cluster_conditions(g_i, conds)
+        staged_done += self._p2_stages(g_i, p2)
         if getattr(self, "longterm", 0):
             say(f"Adding the long-term phase ({self.longterm:g} days)", 38)
             self._add_longterm(g_i, self.longterm)
@@ -1007,6 +1061,10 @@ class PlaxisSolver(P1Mixin):
                 return self._at_point(g_o, phase_o, _rtype(rgroup, rtype), where.strip()[3:], is3)
             if w.startswith("trough"):  # V26.1.9: settlement trough volume / volume loss
                 return self._trough(g_o, phase_o, rgroup, _rtype(rgroup, rtype), w, is3)
+            if w.startswith("profile"):  # V26.1.9 (batch 2): a curve along the surface / the wall, kept with the run
+                pts = self._profile(g_o, phase_o, rgroup, _rtype(rgroup, rtype), w, is3)
+                out.setdefault("_profiles", {})[t.name] = [[round(a, 4), round(b, 6)] for a, b in pts]
+                return max(abs(b) for _, b in pts)
             res = g_o.getresults(phase_o, _rtype(rgroup, rtype), "node")
             try:
                 values = [float(x) for x in res]
