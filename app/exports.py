@@ -238,6 +238,7 @@ def excel(project: dict, task: dict, out: dict, runs_all: list[dict], figs: list
     from openpyxl.utils import get_column_letter
 
     plan = task["plan"]
+    m = (project.get("setup") or {}).get("plaxis_model") or {}
     head = PatternFill("solid", fgColor="1D6B43")
     hfont = Font(bold=True, color="FFFFFF")
     thin = Side(style="thin", color="C8D6CC")
@@ -268,7 +269,7 @@ def excel(project: dict, task: dict, out: dict, runs_all: list[dict], figs: list
     r1 = r0 + 3 + len(plan["variables"])
     ws.cell(r1, 1, "PLAXIS results").font = Font(bold=True, size=12)
     _table(ws, r1 + 1, ["Result", "Unit", "Phase", "Criterion"],
-           [[t["label"], t["unit"], t.get("phase") or "last phase", _crit(t)] for t in plan["targets"]], head, hfont, box)
+           [[t["label"], t["unit"], _phase_text(t, m), _crit(t)] for t in plan["targets"]], head, hfont, box)
 
     ws2 = wb.create_sheet("Runs")
     vs, ts = plan["variables"], plan["targets"]
@@ -301,6 +302,21 @@ def excel(project: dict, task: dict, out: dict, runs_all: list[dict], figs: list
         for col, w in zip("ABCDE", (34, 10, 18, 18, 14)):
             ws3.column_dimensions[col].width = w
 
+    fr, sr = features_rows(task, m), stages_rows(runs_all)
+    if fr or sr or model_objects(m):  # V26.1.9: the study's PLAXIS features and what each run set in the stages
+        ws4 = wb.create_sheet("PLAXIS features")
+        r = 1
+        for title, hdr, rows in (("PLAXIS features of the study", ["Feature", "Setting"], fr),
+                                 ("Other PLAXIS objects of the model", ["Object", "Type", "Details"], model_objects(m)),
+                                 ("What each run set in the stages", ["Run", "Set in PLAXIS"], sr)):
+            if not rows:
+                continue
+            ws4.cell(r, 1, title).font = Font(bold=True, size=12)
+            _table(ws4, r + 1, hdr, rows, head, hfont, box)
+            r += len(rows) + 4
+        for col, w in zip("ABC", (34, 90, 60)):
+            ws4.column_dimensions[col].width = w
+
     wsf = wb.create_sheet("Figures")
     row = 1
     for f in figs:
@@ -328,6 +344,19 @@ def _table(ws, r, hdr, rows, fill, font, border):
             c.border = border
             if isinstance(v, float):
                 c.number_format = "0.000"
+
+
+def _phase_text(t: dict, m: dict | None) -> str:
+    """The phase a result is read in, as the report shows it (V26.1.9: the phases OPTIMUS adds have their own names)."""
+    ph = t.get("phase") or ""
+    ids = {x["name"]: x.get("id") or x["name"] for x in (m or {}).get("phases") or []}
+    if ph.startswith("@safety:"):
+        return f"safety phase after {ids.get(ph[8:], ph[8:])} (added)"
+    if ph == "@dynamic":
+        return "dynamic phase (added)"
+    if ph == "@longterm":
+        return "long term (added)"
+    return t.get("phase_label") or ids.get(ph, ph) or "last phase"
 
 
 def _crit(t: dict) -> str:
@@ -364,6 +393,7 @@ def _soil_matrix(m: dict) -> tuple[list[str], list[list[str]]]:
                 keys.append(k)
     hdr = ["Parameter"] + [f"{x['name']} ({x.get('model') or ''})".replace(" ()", "") for x in soils]
     rows = [["Material model"] + [x.get("model") or "—" for x in soils]] + \
+           ([["Drainage type"] + [x.get("drainage") or "—" for x in soils]] if any(x.get("drainage") for x in soils) else []) + \
            [[SOIL_NAMES.get(k, k)] + [S.fmt(float(v)) if S._isnum(v) else (str(v) if v not in (None, "") else "—")
                                       for v in ((x.get("props") or {}).get(k) for x in soils)] for k in keys]
     return hdr, rows
@@ -391,8 +421,53 @@ def model_inputs(m: dict) -> dict:
               "; ".join(f"{k} = {S.fmt(float(v))} {unit.get((ld['name'], k), '')}".strip() for k, v in (ld.get("props") or {}).items() if S._isnum(v)) or "⚠ no value",
               stages(ld["name"])] for ld in m.get("loads") or []]
     phases = [[str(i), ph.get("id") or ph["name"], ph["name"], ph.get("type") or ""] for i, ph in enumerate(m.get("phases") or [])]
-    return {"soil": _soil_matrix(m), "structures": structs, "loads": loads, "phases": phases,
+    return {"soil": _soil_matrix(m), "structures": structs, "loads": loads, "phases": phases, "objects": model_objects(m),
             "mesh": m.get("mesh") or {}, "counts": m.get("counts") or {}, "checks": model_checks(m)}
+
+
+def model_objects(m: dict) -> list[list[str]]:
+    """V26.1.9: the other PLAXIS objects read from the model (interfaces, tunnels, contractions, wells, drains,
+    prescribed displacements, soil clusters), as rows [object, type, details] for the report."""
+    mats = {x["name"]: x for x in m.get("materials") or []}
+    num = lambda v: S.fmt(float(v)) if S._isnum(v) else "—"
+    rows = []
+    for x in m.get("interfaces") or []:
+        mat = mats.get(x.get("material")) or {}
+        ri = (mat.get("props") or {}).get("Rinter")
+        rows.append([x["name"], f"{x.get('side') or ''} interface".strip(), f"material {mat.get('id') or x.get('material') or 'from the adjacent soil'}"
+                     + (f", Rinter {num(ri)}" if ri is not None else "") + (f", {x['mode']}" if x.get("mode") else "")])
+    for x in m.get("tunnels") or []:
+        rows.append([x["name"], "tunnel", "—"])
+    for x in m.get("contractions") or []:
+        rows.append([x["name"], "contraction", f"Cref {num(x.get('value'))} %"])
+    for coll, lab, unit in (("wells", "well", "m³/day"), ("drains", "drain", "m")):
+        for x in m.get(coll) or []:
+            rows.append([x["name"], lab, f"{x.get('prop')} = {num(x.get('value'))} {unit}"])
+    for x in m.get("displacements") or []:
+        rows.append([x["name"], f"prescribed displacement ({x.get('kind') or ''})".replace(" ()", ""),
+                     "; ".join(f"{k} = {num(v)} m" for k, v in (x.get("props") or {}).items()) or "—"])
+    if m.get("clusters"):
+        rows.append([f"{len(m['clusters'])} soil clusters", "soil clusters", ", ".join(c.get("name", "") for c in m["clusters"][:12])
+                     + (" …" if len(m["clusters"]) > 12 else "")])
+    return rows
+
+
+def features_rows(task: dict, m: dict) -> list[list[str]]:
+    """V26.1.9: the PLAXIS features of the study (safety phases, result points, new structures, dynamics)."""
+    from . import features
+    return features.describe(m or {}, (task.get("plan") or {}).get("study") or {})
+
+
+def stages_rows(runs_all: list[dict]) -> list[list[str]]:
+    """V26.1.9: what each run set in PLAXIS beyond the variables' values: the stage values (prestress, water, wells,
+    new structures, added safety / dynamic phases) and the soil switches (drainage, interfaces, design approach)."""
+    rows = []
+    for r in runs_all:
+        o = r.get("outputs") or {}
+        for x in (o.get("_stages_applied") or []) + (o.get("_soil_models") or []):
+            if x:
+                rows.append([f"Run {r.get('no')}", str(x)])
+    return rows
 
 
 def model_checks(m: dict) -> list[str]:
@@ -421,8 +496,9 @@ def model_checks(m: dict) -> list[str]:
     return out
 
 
-def geometry_png(m: dict) -> bytes | None:
-    """The model geometry (front view): soil layers, structures, loads, water level, with the point names."""
+def geometry_png(m: dict, study: dict | None = None) -> bytes | None:
+    """The model geometry (front view): soil layers, structures, loads, water level, with the point names. V26.1.9:
+    with the study's new structures (dashed) and result points."""
     if not m or not m.get("points"):
         return None
     plt = _plt()
@@ -448,6 +524,21 @@ def geometry_png(m: dict) -> bytes | None:
             ax.plot([p[0] for p in pts], [p[up] for p in pts], color=c, lw=3 if s.get("kind") == "plate" else 2, solid_capstyle="round")
             mx, my = sum(p[0] for p in pts) / len(pts), sum(p[up] for p in pts) / len(pts)
             ax.annotate(s["name"], (mx, my), fontsize=7, color=c, xytext=(4, 4), textcoords="offset points")
+    from . import features
+    fp = features.points(m, study or {})
+    for a in fp["added"]:
+        c = next((v for k, v in kc.items() if k in a["kind"]), "#455a64")
+        ax.plot([a["a"][0], a["b"][0]], [a["a"][up], a["b"][up]], "--", color=c, lw=2.2, label=None)
+        ax.annotate(a["name"] + " (added)", ((a["a"][0] + a["b"][0]) / 2, (a["a"][up] + a["b"][up]) / 2), fontsize=7,
+                    color=c, xytext=(4, -9), textcoords="offset points")
+    for p in fp["probes"]:
+        ax.plot([p["at"][0]], [p["at"][up]], marker="D", ms=5, color="#c2185b", ls="none")
+        ax.annotate(p["name"], (p["at"][0], p["at"][up]), fontsize=7, color="#c2185b", xytext=(4, 4), textcoords="offset points")
+    for w in [x for coll in ("wells", "drains") for x in m.get(coll) or []]:
+        pts = w.get("points") or []
+        if len(pts) >= 2:
+            ax.plot([q[0] for q in pts], [q[up] for q in pts], ":", color="#0277bd", lw=1.6)
+            ax.annotate(w["name"], (pts[0][0], pts[0][up]), fontsize=6.5, color="#0277bd", xytext=(3, 3), textcoords="offset points")
     xs = [p["x"] for p in m["points"]]
     ys = [p["z"] if is3 else p["y"] for p in m["points"]]
     span = (max(ys) - min(ys)) or 1
@@ -615,9 +706,13 @@ def word(project: dict, task: dict, out: dict, runs_all: list[dict], figs: list[
             d.add_paragraph("2.4 Construction stages", style="Heading 3")
             _caption(d, "Calculation phases.", "Table")
             _wtable(d, ["#", "Stage", "PLAXIS phase", "Calculation type"], mi["phases"])
+        if mi["objects"]:  # V26.1.9
+            d.add_paragraph("2.5 Interfaces, tunnels, wells, drains and other objects", style="Heading 3")
+            _caption(d, "Other PLAXIS objects of the Original File.", "Table")
+            _wtable(d, ["Object", "Type", "Details"], mi["objects"])
         if mi["mesh"]:
             d.add_paragraph("Mesh: " + ", ".join(f"{k} {v}" for k, v in mi["mesh"].items() if not isinstance(v, (dict, list))))
-        d.add_paragraph("2.5 Model check", style="Heading 3")
+        d.add_paragraph("2.6 Model check", style="Heading 3")
         if mi["checks"]:
             for x in mi["checks"]:
                 d.add_paragraph(f"⚠ {x}", style="List Bullet")
@@ -634,7 +729,12 @@ def word(project: dict, task: dict, out: dict, runs_all: list[dict], figs: list[
              for v in plan["variables"]])
     d.add_paragraph("PLAXIS results", style="Heading 3")
     _wtable(d, ["Result", "Unit", "Phase", "Criterion"],
-            [[t["label"], t["unit"], t.get("phase") or "last phase", _crit(t)] for t in plan["targets"]])
+            [[t["label"], t["unit"], _phase_text(t, m), _crit(t)] for t in plan["targets"]])
+    fr = features_rows(task, m)
+    if fr:  # V26.1.9
+        d.add_paragraph("PLAXIS features of the study", style="Heading 3")
+        d.add_paragraph("Added by OPTIMUS in PLAXIS in every run (the Original File is not changed).")
+        _wtable(d, ["Feature", "Setting"], fr)
 
     from . import project_files
     shots = []
@@ -801,6 +901,11 @@ def word(project: dict, task: dict, out: dict, runs_all: list[dict], figs: list[
                 row.append(S.fmt(float(val)) if S._isnum(val) else r["status"])
             rows.append(row)
         _wtable(d, hdr, rows)
+    sr = stages_rows(runs_all)
+    if sr:  # V26.1.9: what each run set in the stages (kept in stages_applied.txt / soil_models.txt of the run)
+        d.add_paragraph("What each run set in PLAXIS", style="Heading 3")
+        _caption(d, "Stage values, added phases and structures, and soil switches set in each run.", "Table")
+        _wtable(d, ["Run", "Set in PLAXIS"], sr[:400])
     n += 1
     def pic(data_or_path, cap):
         d.add_picture(io.BytesIO(data_or_path) if isinstance(data_or_path, bytes) else str(data_or_path), width=Inches(6.3))
@@ -808,12 +913,13 @@ def word(project: dict, task: dict, out: dict, runs_all: list[dict], figs: list[
         _caption(d, cap)
     if "geometry" in vis and m:
         try:
-            g = geometry_png(m)
+            g = geometry_png(m, plan.get("study"))
         except Exception:  # noqa: BLE001
             g = None
         if g:
             d.add_heading(f"{n}. Model geometry", 1)
-            pic(g, "Model geometry of the Original File (soil layers, structures and loads).")
+            pic(g, "Model geometry of the Original File (soil layers, structures and loads)"
+                + (", with the study's new structures (dashed) and result points." if features_rows(task, m) else "."))
             n += 1
     if "figures" in vis and any(f.get("png") for f in figs):
         d.add_heading(f"{n}. Figures", 1)

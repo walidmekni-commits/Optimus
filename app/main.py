@@ -1889,7 +1889,7 @@ def open_run_file(tid: str, idx: int, body: dict | None = None):
 @app.get("/api/projects/{pid}/geometry.png")
 def geometry_image(pid: str):
     p = _project_or_404(pid)
-    png = exports.geometry_png((p["setup"] or {}).get("plaxis_model") or {})
+    png = exports.geometry_png((p["setup"] or {}).get("plaxis_model") or {}, (p["setup"] or {}).get("study"))
     if not png:
         raise HTTPException(404, "The model is not read yet.")
     return StreamingResponse(io.BytesIO(png), media_type="image/png")

@@ -32,7 +32,7 @@ MODES = {
                   "hint": "Calculate the existing design once and report its results in full detail."},
 }
 DOMAINS = {"geometry": "Geometry", "structures": "Structures", "loads": "Loads", "soil": "Soil",
-           "water": "Water conditions", "mesh": "Mesh", "stages": "Stages"}
+           "water": "Water conditions", "mesh": "Mesh", "stages": "Stages", "thermal": "Thermal"}
 OUT_DOMAINS = {"safety": "Safety", "displacements": "Displacements", "forces": "Structural forces",
                "water": "Pore pressure and flow", "points": "Results at chosen points", "dynamics": "Dynamics"}
 OPERATORS = [">=", "<=", ">", "<"]
@@ -40,11 +40,13 @@ OPERATORS = [">=", "<=", ">", "<"]
 
 def domain_of(c: dict) -> str:
     k = c["key"]
-    if k.startswith(("pt:", "move:", "geo:", "area:", "corner:")) or (k.startswith("del:") and c.get("group") == "Remove a point"):
+    if k.startswith(("pt:", "move:", "geo:", "area:", "corner:", "slope:", "height:", "len:")) or (k.startswith("del:") and c.get("group") == "Remove a point"):
         return "geometry"  # the surcharge area is geometry (Area / Line), its values stay under Loads
     if k.startswith("load:"):
         return "loads"
-    return {"soil": "soil", "flow": "water", "mesh": "mesh", "stages": "stages"}.get(c["section"], "structures")
+    if k.startswith("thermal:"):
+        return "thermal"
+    return {"soil": "soil", "flow": "water", "mesh": "mesh", "stages": "stages", "thermal": "thermal"}.get(c["section"], "structures")
 
 
 def geo_kind(c: dict, m: dict, kinds: dict) -> str | None:
@@ -60,7 +62,7 @@ def geo_kind(c: dict, m: dict, kinds: dict) -> str | None:
     if k.startswith("move:"):
         o = kinds.get(k[5:].rsplit(".", 1)[0]) or {}
         return "area" if m.get("version") == "3d" and len(o.get("points") or []) > 2 else "line"
-    if k.startswith("geo:"):
+    if k.startswith(("geo:", "slope:", "height:", "len:")):
         return "line"
     if k.startswith("layer:"):
         return "volume"
@@ -374,7 +376,7 @@ def build(m: dict, study: dict) -> dict:
             targets.append({"name": f"T{len(targets) + 1}", "label": f"{o['label']} after {ph.get('id') or ph['name']}",
                             "result": o["result"], "phase": features.SAFETY_PHASE + ph["name"],
                             "operator": proto["operator"] if proto else "report", "value": proto.get("value") if proto else None,
-                            "unit": o["unit"], "key": "fos", "stage": True, "safety_after": ph["name"],
+                            "unit": o["unit"], "key": "fos", "safety_after": ph["name"],  # a main result (not a stage value): it is a control / target
                             **({k: proto[k] for k in ("how", "ref", "lo", "hi", "control", "measured", "detector") if k in proto} if proto else {})})
         for i, t in enumerate(targets, 1):
             t["name"] = f"T{i}"
@@ -1031,6 +1033,8 @@ def statistics(targets: list[dict], ok: list[dict]) -> list[dict]:
 
 
 def _short(t: dict) -> str:
+    if t.get("safety_after"):  # V26.1.9: the factor of safety after a chosen stage
+        return t["label"].replace("Factor of safety", "FoS")
     return {"fos": "FoS", "utot": "|u|", "ux": "ux", "uv": "u vert.", "settle": "settlement", "wall_ux": "wall ux",
             "plate_m": "M", "plate_q": "Q", "plate_n": "N", "anchor": "anchor F", "pile_n": "pile N",
             "pexcess": "p excess"}.get(t.get("key"), t["label"])

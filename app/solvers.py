@@ -120,6 +120,15 @@ class SimulatedSolver:
                 out[t.name] = round(out[t.name] * (1 + 0.6 / (int(ph.group(1)) + 1)), 3)  # V26.1.9: FoS falls stage by stage
             elif ph and isinstance(out.get(t.name), float) and not any(k in key for k in ("fos", "msf", "safety", "factor")):
                 out[t.name] = round(out[t.name] * min(1.0, 0.25 + 0.19 * int(ph.group(1))), 5)  # grows stage by stage
+        for t in targets:  # V26.1.9: the settlement trough (m³/m) and the volume loss (%) in their own ranges
+            res = t.result or ""
+            if "|trough" in res and isinstance(out.get(t.name), float):
+                w = self._w(res)
+                out[t.name] = round((0.4 + 1.2 * w) * (1.2 - 0.6 * s), 3) if res.split("|trough", 1)[1].startswith(":") \
+                    else round((1 + 4 * w) * (1.2 - 0.6 * s), 3)
+        applied = self._applied(inputs, variables)
+        if applied:
+            out["_stages_applied"] = applied
         plots = [k for k in getattr(self, "want_plots", None) or [] if k in SIM_KEYS]
         if plots:
             try:
@@ -129,6 +138,28 @@ class SimulatedSolver:
         return out
 
 
+def _sim_applied(self, inputs: dict, variables: list) -> list[str]:
+    """V26.1.9: what the PLAXIS solver would set in the stages for this run (kept with the run as with PLAXIS)."""
+    out = []
+    for ph in getattr(self, "safety_after", None) or []:
+        out.append(f"safety phase added after {ph} (simulated)")
+    for name, sp in (getattr(self, "additions", None) or {}).items():
+        v = next((x for x in variables if x.plaxis_ref == f"{name}.add"), None)
+        on = v is None or (numeric(inputs.get(v.name)) if v.name in inputs else 0) == 1
+        if on:
+            out.append(f"{name}: {sp.get('kind')} added, active from {sp.get('phase')} (simulated)")
+    d = getattr(self, "dynamic", None)
+    if d:
+        out.append(f"dynamic phase added after {d.get('after')} (simulated)")
+    for v in variables:
+        ref = v.plaxis_ref or ""
+        if v.name in inputs and ("@" in ref or ref.startswith(("WaterLevel", "Dynamic.", "Design."))):
+            val = inputs[v.name]
+            out.append(f"{ref} = {val[0] if isinstance(val, (list, tuple)) else val} (simulated)")
+    return out
+
+
+SimulatedSolver._applied = _sim_applied
 SIM_KEYS = ("utot", "ux", "uy", "pexcess", "plate_m", "plate_q", "plate_n")
 
 

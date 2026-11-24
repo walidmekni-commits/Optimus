@@ -157,3 +157,45 @@ def solver_options(m: dict, s: dict) -> dict:
     return {"safety_after": [x for x in o["safety"]["after"] if x in names],
             "additions": {sp["name"]: sp for sp in (added_spec(m, a) for a in o["added"]) if sp},
             "dynamic": o["dynamic"] if o["dynamic"]["on"] and o["dynamic"]["after"] in names else None}
+
+
+def describe(m: dict, s: dict) -> list[list[str]]:
+    """The study's PLAXIS features as rows [feature, setting] for the reports (Word, Excel) and the study page."""
+    o = clean(s or {})
+    is3 = (m or {}).get("version") == "3d"
+    ids = {ph["name"]: ph.get("id") or ph["name"] for ph in (m or {}).get("phases") or []}
+    mats = {x["name"]: x.get("id") or x["name"] for x in (m or {}).get("materials") or []}
+    xyz = lambda p: ", ".join(f"{(p or {}).get(k):g}" for k in (("x", "y", "z") if is3 else ("x", "y"))
+                              if isinstance((p or {}).get(k), (int, float)))
+    rows = []
+    if o["safety"]["after"]:
+        rows.append(["Factor of safety per stage", "a safety phase after " + ", ".join(ids.get(x, x) for x in o["safety"]["after"])
+                     + " in every run"])
+    for p in o["probes"]:
+        rows.append([f"Result point {p['name']}", f"({xyz(p)}): |u|, ux, {'uz' if is3 else 'uy'}"])
+    for a in o["added"]:
+        sp = added_spec(m or {}, a)
+        txt = f"{KINDS[a['kind']]} from ({xyz(a.get('a'))}) to ({xyz(a.get('b'))})"
+        if sp:
+            txt += f", material {mats.get(sp['material'], sp['material']) or 'PLAXIS default'}, active from {ids.get(sp['phase'], sp['phase']) or 'the first stage'}"
+            if a.get("prestress") is not None and a["kind"] == "anchor":
+                txt += f", prestress {a['prestress']:g} kN"
+        else:
+            txt += " (incomplete: not drawn)"
+        rows.append([f"New structure New_{a['id']}", txt])
+    d = o["dynamic"]
+    if d["on"]:
+        rows.append(["Dynamic phase", f"harmonic, {'base shaking' if d['source'] == 'base' else 'on ' + d['source']}, after "
+                     f"{ids.get(d['after'], d['after']) or '(no stage chosen)'}: amplitude {d['amplitude']:g}, "
+                     f"{d['frequency']:g} Hz, {d['duration']:g} s, viscous boundaries"])
+    if (o["tunnel"] or {}).get("d"):
+        rows.append(["Tunnel diameter (volume loss)", f"D = {o['tunnel']['d']:g} m"])
+    return rows
+
+
+def points(m: dict, s: dict) -> dict:
+    """What the views draw for the study's features: the result points and the new structures (PLAXIS coordinates)."""
+    o = clean(s or {})
+    return {"probes": [{"name": p["name"], "at": [p["x"], p["y"], p["z"]]} for p in o["probes"]],
+            "added": [{"name": sp["name"], "kind": sp["kind"], "a": sp["a"], "b": sp["b"]}
+                      for sp in (added_spec(m or {}, a) for a in o["added"]) if sp]}
