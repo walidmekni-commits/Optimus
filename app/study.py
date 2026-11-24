@@ -342,7 +342,7 @@ def build(m: dict, study: dict) -> dict:
     else:
         for key in s["outputs"]:
             add_target(key)
-        if mode == "design_change":  # QA V26.1.8: optional acceptance criteria of the modified design
+        if mode in ("design_change", "combinations"):  # acceptance criteria / scenario targets (Rev B: D1, QA D10)
             for c in s.get("criteria") or []:
                 val = _f(c.get("value"))
                 t = next((t for t in targets if t["key"] == c.get("output")), None)

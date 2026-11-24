@@ -148,3 +148,28 @@ def test_optimization_hands_over_to_design_modification(client):
     # the pre-filled study runs as it is
     tid2, out2 = _run(client, pid)
     assert out2["modifications"] and out2["modifications"][0]["title"].startswith("Modification 1")
+
+
+def test_modification_hands_over_to_scenarios(client):
+    """QA D10: the chosen modification is the base scenario (its values in every scenario), Run 0 is the existing
+    design, and the acceptance criteria are the scenario targets, as the linked-input chip says."""
+    pid, prev = _setup(client, "design_change", params=[{**PHI, "news": [26, 32]}], outputs=["utot", "fos"], criteria=CRIT)
+    tid, out = _run(client, pid)
+    ch = next(m for m in out["modifications"] if m["chosen"])
+    s = client.post(f"/api/tasks/{tid}/handover", json={"to": "combinations"}).json()["study"]
+    assert s["mode"] == "combinations" and s["link"]["to"] == "combinations"
+    assert s["criteria"] == CRIT and s["baseline"] is True
+    assert [p["item"] for p in s["params"]] == [PHI["item"]] and s["params"][0]["list"]
+    prev = client.get(f"/api/projects/{pid}/study").json()
+    assert prev["errors"] == [] and len(prev["rows"]) == 2
+    assert prev["rows"][1]["inputs"]["p1"] == float(ch["values"].split("=")[1].split()[0])
+    tid2, out2 = _run(client, pid)
+    assert any("✓" in r["result"] or "✗" in r["result"] for r in out2["rows"] if r["status"] == "succeeded")
+
+
+def test_handover_name_keeps_the_full_module_name(client):
+    """QA D13: "Design optimization · Run 2", not "Design optim · Run 2"."""
+    pid, _ = _setup(client, "optimize", params=[PHI], targets=[{"output": "fos", "operator": ">=", "value": 0.5}], runs=3)
+    tid, _ = _run(client, pid)
+    s = client.post(f"/api/tasks/{tid}/handover", json={"to": "design_change"}).json()["study"]
+    assert s["names"]["1"].startswith("Design optimization · Run ")

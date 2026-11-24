@@ -177,7 +177,8 @@
   .dbox input, .dbox select { width:6.2rem; border:0; background:transparent; padding:.15rem .2rem; }
   .dbox .dx { border:0; background:transparent; padding:0 .25rem; color:var(--muted); }
   .mname { display:block; width:11rem; font-size:.82rem; padding:.15rem .35rem; margin-top:.2rem; }
-  .modT th, .modT td { white-space:nowrap; } .modT td.v { text-align:right; } .modT th.ch { background:color-mix(in srgb, var(--ok) 14%, transparent); }
+  .modT th, .modT td { white-space:nowrap; } .modT th { text-transform:none; letter-spacing:0; vertical-align:bottom; }
+  .modT th .hv { white-space:normal; max-width:13rem; font-weight:400; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; } .modT td.v { text-align:right; } .modT th.ch { background:color-mix(in srgb, var(--ok) 14%, transparent); }
   .modT .cg { font-size:.76rem; color:var(--muted); display:block; } .modT .cg.good { color:var(--ok); } .modT .cg.bad { color:var(--bad); }
   .modT tr.sum td { font-weight:600; background:var(--soft); }
   .geo .bar { display:flex; gap:.4rem; flex-wrap:wrap; align-items:center; padding:.5rem .8rem; border-bottom:1px solid var(--line); }
@@ -1728,9 +1729,9 @@ function renderOuts() {
         <input class="ov" type="number" step="any" value="${esc(x.value ?? '')}" placeholder="target">${u}`;
     } else if (S.mode === 'calibration') {
       body = curTxt(o, 'max') + `<span class="tlab">Measured</span><input class="ov" type="number" step="any" value="${esc(x.value ?? '')}" placeholder="measured value">${u}`;
-    } else if (S.mode === 'design_change') {  // QA V26.1.8: an optional acceptance criterion of the modified design
+    } else if (S.mode === 'design_change' || S.mode === 'combinations') {  // acceptance criterion / scenario target (optional)
       const cr = (S.criteria || []).find(c => c.output === o.key) || {};
-      body = curTxt(o, 'max') + `<span class="tlab">Acceptance (optional)</span><select class="cop">${CAT.operators.map(op => `<option${op === (cr.operator || '<=') ? ' selected' : ''}>${esc(op.replace('>=', '≥').replace('<=', '≤'))}</option>`).join('')}</select>
+      body = curTxt(o, 'max') + `<span class="tlab">${S.mode === 'combinations' ? 'Target (optional)' : 'Acceptance (optional)'}</span><select class="cop">${CAT.operators.map(op => `<option${op === (cr.operator || '<=') ? ' selected' : ''}>${esc(op.replace('>=', '≥').replace('<=', '≤'))}</option>`).join('')}</select>
         <input class="cov" type="number" step="any" value="${esc(cr.value ?? '')}" placeholder="limit">${u}`;
     }
     return `<div class="prow" data-i="${i}"><div class="pick"><select class="odom" title="Domain">${domOpts(doms, o.domain)}</select><span class="sep">›</span>
@@ -3994,7 +3995,8 @@ function renderPlanPage() {
           <td style="white-space:nowrap"><button class="small ghost" data-up="${i}" title="Earlier"${i ? '' : ' disabled'}>↑</button><button class="small ghost" data-dn="${i}" title="Later"${i < n - 1 ? '' : ' disabled'}>↓</button><button class="small del" data-rm="${i}" title="Remove from the plan">×</button></td></tr>`).join('')}</tbody></table></div>
       <div class="actions" style="margin-top:.5rem"><select id="plAdd"><option value="">＋ Add a module…</option>${keys.map(k => `<option value="${k}">${esc(MODES[k].title)}</option>`).join('')}</select>
         <span class="meta">Calibration, Advanced reporting, or a second study of the same module</span><span class="sp"></span>
-        ${first >= 0 ? `<button class="primary" id="plGo">▶ Continue with ${first + 1} · ${esc(MODES[pl.steps[first]].title)}</button>` : n ? '<span class="pill">✓ every step done</span>' : ''}</div>
+        ${first >= 0 && ['queued', 'running'].includes((lastStudy(pl.steps[first]) || {}).status) ? `<button class="primary" disabled title="Wait for this step to finish">● Step ${first + 1} · ${esc(MODES[pl.steps[first]].title)} is running</button>`
+          : first >= 0 ? `<button class="primary" id="plGo">▶ Continue with ${first + 1} · ${esc(MODES[pl.steps[first]].title)}</button>` : n ? '<span class="pill">✓ every step done</span>' : ''}</div>
       <p class="meta">The plan can be changed at any time; a module already run keeps its results. An answer to What next? that changes the order updates this table.</p>`;
   }
   $('#planPage').innerHTML = `<section class="card"><h2><span class="n">0</span>Study plan<span class="hint">Do you prefer to run several modules? · the first page of the study page · saved with the project</span></h2><div class="body">
@@ -4032,7 +4034,7 @@ $('#planPage').addEventListener('dragend', () => { PL_DRAG = null; $$('#planPage
 function renderLink() {
   const el = $('#linkBox'); if (!el) return;
   const l = S && S.link;
-  if (!l || !l.task) { el.innerHTML = ''; return; }
+  if (!l || !l.task || (l.to && l.to !== S.mode)) { el.innerHTML = ''; return; }  // QA D11: only on the module it was made for
   const src = STUDIES.find(x => x.task === l.task), nm = src ? `${(NEWTXT[src.kind] || [l.title])[0]} ${String(src.n).padStart(2, '0')}` : l.title;
   el.innerHTML = `<div class="linkChip">🔗 <span style="flex:1;min-width:16rem">Linked input from <b>${esc(nm)}</b>${(l.taken || []).length ? ': ' + l.taken.map(esc).join(' · ') : ''}. Edit freely: nothing is calculated until you press Run.</span>
     <button class="small" id="linkOff" title="Keep the values as ordinary inputs">Unlink</button></div>`;
@@ -4146,7 +4148,7 @@ function modTable(r) {
   const cols = (r.modifications || []).filter(c => c.results), ex = r.existing || {};
   if (cols.length < 2) return '';
   const labels = cols[0].results.map(x => x.label);
-  const head = `<tr><th>Result</th><th class="v">Existing (Run 0)</th>${cols.map(c => `<th class="v${c.chosen ? ' ch' : ''}">${esc(c.title)}${c.chosen ? ' ★' : ''}<span class="cg">${esc(c.values)}</span></th>`).join('')}<th>Criterion</th></tr>`;
+  const head = `<tr><th>Result</th><th class="v">Existing (Run 0)</th>${cols.map(c => `<th class="v${c.chosen ? ' ch' : ''}" title="${esc(c.values)}">${esc(c.title)}${c.chosen ? ' ★' : ''}<span class="cg hv">${esc(c.values)}</span></th>`).join('')}<th>Criterion</th></tr>`;
   const ok = b => b === true ? ' <span class="ok">✓</span>' : b === false ? ' <span class="miss">✗</span>' : '';
   const body = labels.map(lab => { const t0 = cols[0].results.find(x => x.label === lab);
     return `<tr><td>${esc(lab + unitTxt(t0.unit))}</td><td class="v">${t0.old != null ? fmtNum(t0.old) : '—'}${ok(t0.meets_old)}</td>${cols.map(c => { const x = c.results.find(y => y.label === lab);
