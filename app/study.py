@@ -775,7 +775,10 @@ def missing_results(targets: list[dict], runs: list[dict]) -> list[dict]:
         why = {m.split(": ")[0]: m.split(": ", 1)[1] if ": " in m else "" for m in (r.get("outputs") or {}).get("_missing") or []}
         for t in targets:
             if not _isnum((r.get("outputs") or {}).get(t["name"])) and t["result"].lower() != "file":
-                e = out.setdefault(t["label"], {"label": t["label"], "runs": [], "reason": why.get(t["label"], "not read")})
+                w = why.get(t["label"], "not read")
+                if "could not convert string to float" in w:  # V26.1.8: PLAXIS returned text (no values at this stage)
+                    w = "not active at this stage (PLAXIS returned no values)"
+                e = out.setdefault(t["label"], {"label": t["label"], "runs": [], "reason": w})
                 e["runs"].append(r.get("no"))
     return list(out.values())
 
