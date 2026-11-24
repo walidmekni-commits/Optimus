@@ -203,3 +203,51 @@ def points(m: dict, s: dict) -> dict:
     return {"probes": [{"name": p["name"], "at": [p["x"], p["y"], p["z"]]} for p in o["probes"]],
             "added": [{"name": sp["name"], "kind": sp["kind"], "a": sp["a"], "b": sp["b"]}
                       for sp in (added_spec(m or {}, a) for a in o["added"]) if sp]}
+
+
+def probe_checks(m: dict, s: dict) -> list[str]:
+    """QA V26.1.9 D7: each result point checked against the model before the runs: outside the model, above the
+    ground, on a structure (the soil value next to it is read)."""
+    from .plaxis_model import _inside
+    o = clean(s or {})
+    is3 = (m or {}).get("version") == "3d"
+    e = (m or {}).get("extents") or {}
+    out = []
+    for p in o["probes"]:
+        x, y, z = p["x"], p["y"], p["z"]
+        up = z if is3 else y
+        lab = f"Result point {p['name']} ({x:g}, {y:g}" + (f", {z:g})" if is3 else ")")
+        span = [("x", x, e.get("xmin"), e.get("xmax")), ("y", y, e.get("ymin"), e.get("ymax"))] + \
+               ([("z", z, e.get("zmin"), e.get("zmax"))] if is3 else [])
+        bad = [a for a, v, lo, hi in span if lo is not None and hi is not None and not (lo - 1e-6 <= v <= hi + 1e-6)]
+        if bad:
+            out.append(f"{lab}: outside the model ({', '.join(bad)} beyond its extents): PLAXIS will give no value.")
+            continue
+        if not is3 and m.get("soil_polygons"):
+            if not any(_inside(x, y - 1e-3, [(float(q[0]), float(q[1])) for q in sp.get("points") or []]) for sp in m["soil_polygons"]):
+                out.append(f"{lab}: not inside any soil cluster of the model: PLAXIS may give no value.")
+        elif is3 and m.get("boreholes"):
+            top = max((lay["top"] for b in m["boreholes"] for lay in b.get("layers") or []), default=None)
+            if top is not None and up > top + 1e-6:
+                out.append(f"{lab}: above the ground surface (z {top:g}): PLAXIS will give no value.")
+        for st in m.get("structures") or []:
+            pts = st.get("points") or []
+            if len(pts) == 2 and _near_segment((x, y, z), pts[0], pts[1], is3) < 0.02:
+                out.append(f"{lab}: on {st['name']}: the soil value next to it is read; move it 0.1 m off the structure "
+                           "for the soil alone.")
+                break
+    return out
+
+
+def _near_segment(p, a, b, is3: bool) -> float:
+    import math
+    a = [float(v) for v in (list(a) + [0, 0])[:3]]
+    b = [float(v) for v in (list(b) + [0, 0])[:3]]
+    p = [float(v) for v in p]
+    if not is3:
+        p = [p[0], p[1], 0.0]
+        a[2] = b[2] = 0.0
+    d = [b[i] - a[i] for i in range(3)]
+    L2 = sum(c * c for c in d) or 1e-12
+    t = max(0.0, min(1.0, sum((p[i] - a[i]) * d[i] for i in range(3)) / L2))
+    return math.dist(p, [a[i] + t * d[i] for i in range(3)])

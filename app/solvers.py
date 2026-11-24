@@ -242,7 +242,7 @@ def _span(v: Variable):
 
 
 # ---------------------------------------------------------------------------
-from .plaxis_model import area_edit  # noqa: E402
+from .plaxis_model import area_edit, calc_type_name  # noqa: E402
 SHIFT_REF = __import__("re").compile(r"^(.+)\.(\w+)\+(?:\*(-?[\d.]+(?:[eE][-+]?\d+)?))?(?:~(-?[\d.]+(?:[eE][-+]?\d+)?))?$")
 LOAD_PROPS_ALL = {"sigx", "sigy", "sigz", "sigz_ref", "qx_start", "qy_start", "qz_start", "qx_end", "qy_end", "qz_end",
                   "fx", "fy", "fz"}
@@ -607,7 +607,7 @@ class PlaxisSolver(P1Mixin, P2Mixin):
         last = ""
         for ph in list(g_i.Phases):
             try:
-                kind = str(getattr(ph, "DeformCalcType", "")).lower()
+                kind = calc_type_name(getattr(ph, "DeformCalcType", "")).lower()
             except Exception:  # noqa: BLE001
                 kind = ""
             try:
@@ -810,6 +810,7 @@ class PlaxisSolver(P1Mixin, P2Mixin):
     def run(self, files, inputs: dict, variables: list[Variable], targets: list[Target], run_dir: Path) -> dict:
         from plxscripting.easy import new_server
 
+        self.last_applied = None
         run_dir = run_dir.resolve()
         run_dir.mkdir(parents=True, exist_ok=True)
         say = getattr(self, "progress", None) or (lambda msg, pct=None: None)  # what the run is doing (and %), shown on the page
@@ -1010,13 +1011,20 @@ class PlaxisSolver(P1Mixin, P2Mixin):
                 raise SolverError("Could not set the initial phase to gravity loading (needed for Soft Soil Creep).")
             soil_models.append("InitialPhase: gravity loading (K0 procedure fails with Soft Soil Creep)")
         self._mark_phases(g_i)
+        # QA V26.1.9 D8: what the run set is kept even when PLAXIS fails afterwards (engine: outputs of a failed run)
+        self.last_applied = {k: v for k, v in (("_soil_models", list(soil_models)), ("_stages_applied", list(staged_done))) if v}
+        for fname, lines in (("soil_models.txt", soil_models), ("stages_applied.txt", staged_done)):
+            if lines:
+                (run_dir / fname).write_text("\n".join(lines), encoding="utf-8")
         say(f"Calculating every phase in PLAXIS ({len(list(g_i.Phases))} phases); a 3D model can take a long time", 40)
         g_i.calculate()
         say("Checking the phases and saving the run", 85)
         for p in g_i.Phases:
             info = str(getattr(getattr(p, "LogInfo", None), "value", "0") or "0")
             if info not in ("0", ""):
-                raise SolverError(f"Phase {p.Name.value} failed (LogInfo {info})")
+                from .insight import LOGINFO
+                why = LOGINFO.get(info.strip(), f"PLAXIS LogInfo {info}")  # QA V26.1.9 D8: the code said in words
+                raise SolverError(f"Phase {p.Name.value} failed: {why}")
 
         run_file = run_dir / (path.stem + "_" + run_dir.name + path.suffix)
         g_i.save(str(run_file))
@@ -1065,7 +1073,22 @@ class PlaxisSolver(P1Mixin, P2Mixin):
                 pts = self._profile(g_o, phase_o, rgroup, _rtype(rgroup, rtype), w, is3)
                 out.setdefault("_profiles", {})[t.name] = [[round(a, 4), round(b, 6)] for a, b in pts]
                 return max(abs(b) for _, b in pts)
-            res = g_o.getresults(phase_o, _rtype(rgroup, rtype), "node")
+            try:
+                rt = _rtype(rgroup, rtype)
+            except SolverError:
+                if rtype.lower() != "qtot":
+                    raise
+                rt = None
+            if rt is None:  # QA V26.1.9 D6: PLAXIS 3D has no Qtot: |q| = √(qx² + qy² + qz²) at each node
+                comps = []
+                for c in ("Qx", "Qy", "Qz") if is3 else ("Qx", "Qy"):
+                    try:
+                        comps.append([float(x) for x in g_o.getresults(phase_o, getattr(rgroup, c), "node")])
+                    except Exception as e:  # noqa: BLE001
+                        raise SolverError(f"not in this PLAXIS: specific discharge {c} ({e})")
+                res = [math.sqrt(sum(v * v for v in vs)) for vs in zip(*comps)]
+            else:
+                res = g_o.getresults(phase_o, rt, "node")
             try:
                 values = [float(x) for x in res]
             except (TypeError, ValueError):  # e.g. anchors not yet active in this stage: PLAXIS answers with a text
@@ -1154,10 +1177,11 @@ def _rtype(rgroup, name: str):
 
 
 def _is_safety(phase) -> bool:
+    """A safety (strength reduction) phase. QA V26.1.9 D1: PLAXIS 3D 2024.3 gives the calculation type as a number
+    (7 = safety), not as the word 'safety'."""
     for attr in ("DeformCalcType", "CalculationType"):
         try:
-            v = getattr(phase, attr)
-            if "safety" in str(getattr(v, "value", v)).lower():
+            if "safety" in calc_type_name(getattr(phase, attr)).lower():
                 return True
         except Exception:  # noqa: BLE001
             continue
@@ -1169,7 +1193,7 @@ def deterministic(err: str) -> bool:
     geometry PLAXIS refused): retrying it only repeats a 10-minute calculation (QA V26.1.8)."""
     e = (err or "").lower()
     return any(k in e for k in ("invalid material", "unknown property", "is not a number", "did not take the new geometry",
-                                "not found", "no plaxis reference", "overlap", "is invalid", "not in this model", "soil model", "failed (loginfo",
+                                "not found", "no plaxis reference", "overlap", "is invalid", "not in this model", "soil model", "failed (loginfo", "plaxis loginfo",
                                 # V26.1.9: a feature this PLAXIS refuses gives the same answer again
                                 "drainage type", "did not draw", "dynamic", "interface material", "safety phase",
                                 "pore pressure calculation", "water level", "water condition", "could not set", "exist in plaxis 3d only"))

@@ -23,8 +23,12 @@ import re
 DRAINAGE_NAMES = {0: ("Drained",), 1: ("Undrained (A)", "Undrained A", "UndrainedA"),
                   2: ("Undrained (B)", "Undrained B", "UndrainedB"), 3: ("Undrained (C)", "Undrained C", "UndrainedC"),
                   4: ("Non-porous", "NonPorous", "Non porous")}
-PORE_NAMES = {0: ("Phreatic",), 1: ("Steady state groundwater flow", "Steady-state groundwater flow", "SteadyStateGroundwaterFlow"),
-              2: ("Use pressures from previous phase", "Use pressures from previous phase", "UsePressuresFromPreviousPhase")}
+# QA V26.1.9 D5: PLAXIS 3D 2024.3 refused "Steady-state groundwater flow"; its own token is tried first, in the
+# spellings of the PLAXIS 2D / 3D command references, then the lower case forms
+PORE_NAMES = {0: ("Phreatic", "phreatic"),
+              1: ("Steady state groundwater flow", "steady state groundwater flow", "SteadyStateGroundwaterFlow",
+                  "Steady-state groundwater flow", "Steady state flow"),
+              2: ("Use pressures from previous phase", "use pressures from previous phase", "UsePressuresFromPreviousPhase")}
 CLUSTER_NAMES = {0: ("Global level", "GlobalLevel"), 1: ("Dry",), 2: ("Interpolate",)}
 # EC7 partial factors applied by OPTIMUS (variable actions γQ, soil strength γφ' on tan φ', γc', γcu, and the
 # factor on the effects of actions for the structural forces). DA2* and DA1-C1 factor the effects (1.35), the
@@ -65,10 +69,11 @@ def _set(g_i, obj, prop: str, value) -> None:
     raise RuntimeError(f"{_name(obj)}.{prop}: " + "; ".join(dict.fromkeys(errors))[:300])
 
 
-def _set_names(g_i, obj, prop: str, code: int, names: dict) -> str:
-    """An enumerated property: the PLAXIS name(s) of the code, then the code itself."""
+def _set_names(g_i, obj, prop: str, code: int, names: dict, raw: bool = True) -> str:
+    """An enumerated property: the PLAXIS name(s) of the code, then the code itself (raw=False: only the names /
+    PLAXIS numbers listed, e.g. the calculation type whose numbers are not OPTIMUS' codes)."""
     errors = []
-    for v in list(names.get(code, ())) + [code]:
+    for v in list(names.get(code, ())) + ([code] if raw else []):
         try:
             _set(g_i, obj, prop, v)
             return str(v)
@@ -157,9 +162,12 @@ class P1Mixin:
         _try(g_i, "gotostages")
         ph = self._phase(g_i, phase_name)
         try:
-            used = _set_names(g_i, ph, "PorePresCalcType", int(code), PORE_NAMES)
+            used = _set_names(g_i, ph, "PorePresCalcType", int(code), PORE_NAMES, raw=False)
         except Exception as e:  # noqa: BLE001
-            raise SolverError(f"{phase_name}: PLAXIS did not take the pore pressure calculation type {code}: {e}")
+            want = PORE_NAMES.get(int(code), (str(code),))[0]
+            hint = (" Steady-state groundwater flow needs the PLAXIS groundwater flow option of this licence; PLAXIS "
+                    "refused every spelling of it, so this licence (or this phase) may not allow it.") if int(code) == 1 else ""
+            raise SolverError(f"{phase_name}: PLAXIS did not take the pore pressure calculation '{want}'.{hint} PLAXIS: {e}")
         return f"{phase_name}: pore pressures by {used}"
 
     # --- water level per stage and cluster water conditions ------------------------------------------------------
@@ -254,6 +262,43 @@ class P1Mixin:
         return done
 
     # --- interfaces ---------------------------------------------------------------------------------------------
+    def _adjacent_soil(self, g_i, itf):
+        """The soil material next to an interface, read in PLAXIS: the borehole layer at the mid level of the
+        interface (or of its plate). Returns (material, its name) or (None, "")."""
+        from .plaxis_model import _obj_points, read_boreholes
+        is3 = False
+        pts = []
+        for o in (getattr(itf, "Parent", None), itf):
+            if o is None:
+                continue
+            for flag in (True, False):
+                try:
+                    pts = _obj_points(o, flag)
+                    is3 = flag and any(len(q) > 2 for q in pts)
+                except Exception:  # noqa: BLE001
+                    pts = []
+                if pts:
+                    break
+            if pts:
+                break
+        if not pts:
+            return None, ""
+        vi = 2 if is3 else 1
+        lv = [float(q[vi]) for q in pts if len(q) > vi]
+        mid = (min(lv) + max(lv)) / 2 if lv else 0.0
+        _try(g_i, "gotosoil")
+        try:
+            holes = read_boreholes(g_i, is3)
+        except Exception:  # noqa: BLE001
+            holes = []
+        for lay in (holes[0]["layers"] if holes else []):
+            if lay["bottom"] - 1e-9 <= mid <= lay["top"] + 1e-9 and lay.get("material"):
+                try:
+                    return self._find(g_i, lay["material"]), lay["material"]
+                except Exception:  # noqa: BLE001
+                    return None, ""
+        return None, ""
+
     def _interfaces(self, g_i, edits: dict) -> list[str]:
         """The interface's own Rinter / virtual thickness: a copy of its material (or of the adjacent soil) with the
         new values, set as the interface's custom material in Structures mode and in every stage."""
@@ -271,7 +316,12 @@ class P1Mixin:
             except Exception:  # noqa: BLE001
                 pass
             if src is None and base:
-                src = self._find(g_i, base)
+                try:
+                    src = self._find(g_i, base)
+                except Exception:  # noqa: BLE001
+                    src = None
+            if src is None:  # QA V26.1.9 D4: 'from adjacent soil': the soil layer at the interface's mid level
+                src, base = self._adjacent_soil(g_i, itf)
             if src is None:
                 raise SolverError(f"{name}: no material to copy for its own interface properties (custom material or adjacent soil)")
             _try(g_i, "gotosoil")
@@ -328,7 +378,8 @@ class P1Mixin:
                         _staged_set(o, "Material", ph, new, g_i)
                     except Exception:  # noqa: BLE001
                         pass
-            done.append(f"{name}: own material {_name(new)} ({', '.join(f'{k} = {float(v):g}' for k, v in props.items())})")
+            done.append(f"{name}: own material {_name(new)}, a copy of {_name(src)} "
+                        f"({', '.join(f'{k} = {float(v):g}' for k, v in props.items())})")
         return done
 
     # --- design approach (EC7 partial factors) ---------------------------------------------------------------------
@@ -510,7 +561,7 @@ class P1Mixin:
             ph = g_i.phase(base)
             ph = ph[-1] if isinstance(ph, (list, tuple)) else ph
             try:
-                _set_names(g_i, ph, "DeformCalcType", 0, {0: ("Safety", "safety")})
+                _set_names(g_i, ph, "DeformCalcType", 0, {0: ("Safety", "safety", 7)}, raw=False)
             except Exception as e:  # noqa: BLE001
                 raise SolverError(f"Could not make a safety phase after {base_name}: {e}")
             try:
@@ -608,9 +659,11 @@ class P1Mixin:
         ph = g_i.phase(base)
         ph = ph[-1] if isinstance(ph, (list, tuple)) else ph
         try:
-            _set_names(g_i, ph, "DeformCalcType", 0, {0: ("Dynamic", "dynamic")})
+            _set_names(g_i, ph, "DeformCalcType", 0, {0: ("Dynamic", "dynamic", 8)}, raw=False)
         except Exception as e:  # noqa: BLE001
-            raise SolverError(f"Could not make a dynamic phase after {d['after']} (PLAXIS Dynamics needed): {e}")
+            # QA V26.1.9 D3: PLAXIS 3D Advanced refuses dynamic phases: said plainly, the run fails
+            raise SolverError(f"PLAXIS refused a dynamic phase after {d['after']}: this PLAXIS licence does not include "
+                              f"Dynamics (PLAXIS 3D Advanced has none; Ultimate or the Dynamics module is needed). PLAXIS: {e}")
         try:
             _set(g_i, ph, "Identification", f"{DYNAMIC_ID} after {d['after']}")
         except Exception:  # noqa: BLE001
@@ -667,20 +720,30 @@ class P1Mixin:
         pt = tuple(nums[:3] if is3 else nums[:2])
         if len(pt) < (3 if is3 else 2):
             raise SolverError(f"point '{where}' not understood: give x;y" + (";z" if is3 else ""))
-        r = None
         errors = []
-        for how in (lambda: g_o.getsingleresult(phase_o, rtype, pt), lambda: g_o.getsingleresult(phase_o, rtype, pt, False)):
-            try:
-                r = how()
-                break
-            except Exception as e:  # noqa: BLE001
-                errors.append(str(e))
-        if r is None:
-            raise SolverError("PLAXIS Output did not give the value at the point: " + "; ".join(errors[:2]))
-        try:
-            return abs(float(_val(r)))
-        except (TypeError, ValueError):
-            raise SolverError(f"not in this model at this point: {str(r)[:60]} (outside the mesh?)")
+        vi = 2 if is3 else 1
+        # QA V26.1.9 D7: a point on the ground surface or on a model boundary may fall just outside the mesh: it is
+        # tried again 1 cm inside (down, then towards the model)
+        tries = [pt]
+        for dv in (-0.01, -0.05):
+            q = list(pt)
+            q[vi] += dv
+            tries.append(tuple(q))
+        for p in tries:
+            for how in (lambda: g_o.getsingleresult(phase_o, rtype, p), lambda: g_o.getsingleresult(phase_o, rtype, p, False)):
+                try:
+                    r = how()
+                except Exception as e:  # noqa: BLE001
+                    errors.append(str(e))
+                    continue
+                try:
+                    return abs(float(_val(r)))
+                except (TypeError, ValueError):
+                    errors.append(str(r)[:80])
+        where_txt = ", ".join(f"{c:g}" for c in pt)
+        raise SolverError(f"not in this model at this stage: PLAXIS gave no value at ({where_txt}): the point lies outside "
+                          f"the mesh, inside a structure, or in soil that is not active (excavated) in this stage. "
+                          f"PLAXIS: {'; '.join(dict.fromkeys(errors))[:160]}")
 
     @staticmethod
     def _trough(g_o, phase_o, rgroup, rtype, where: str, is3: bool) -> float:

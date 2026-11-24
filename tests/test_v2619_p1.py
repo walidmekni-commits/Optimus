@@ -34,7 +34,7 @@ def test_p1_inputs_are_offered(v):
     cat = study.catalog(m)
     dom = {p["key"]: p["domain"] for p in cat["params"]}
     assert dom["wlevel:@Phase_4"] == dom["pore:Phase_2"] == dom["drain:Drain_1@Phase_4"] == "water"
-    assert dom["prestress:Anchor@Phase_3"] == "stages" and dom["iface:PositiveInterface_1.Rinter"] == "structures"
+    assert dom["prestress:Anchor@Phase_3"] == "features" and dom["iface:PositiveInterface_1.Rinter"] == "features"  # QA D14
     outs = {o["key"]: o for o in cat["outputs"]}
     assert {"geogrid_n", "skin", "iface_sn", "iface_tau", "q", "head", "psteady", "pactive", "trough"} <= set(outs)
     assert ("beam_n" in outs) == (v == "3d")  # beams (capping beam) exist in PLAXIS 3D only

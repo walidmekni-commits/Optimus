@@ -21,9 +21,11 @@ import re
 
 from .plaxis_p1 import _name, _set, _set_names, _staged_set, _try, _val
 
-INITIAL_NAMES = {0: ("K0 procedure", "K0Procedure"), 1: ("Gravity loading", "GravityLoading"), 2: ("Field stress", "FieldStress")}
-CALC_NAMES = {0: ("Plastic",), 1: ("Consolidation",), 2: ("Fully coupled flow-deformation", "Flow-deformation coupled",
-                                                         "FullyCoupledFlowDeformation")}
+# the PLAXIS names, then the PLAXIS number (QA V26.1.9 D1: 1 K0 procedure, 4 Plastic, 7 Safety in PLAXIS 3D 2024.3)
+INITIAL_NAMES = {0: ("K0 procedure", "K0Procedure", 1), 1: ("Gravity loading", "GravityLoading", 2),
+                 2: ("Field stress", "FieldStress", 3)}
+CALC_NAMES = {0: ("Plastic", 4), 1: ("Consolidation", 5), 2: ("Fully coupled flow-deformation", "Flow-deformation coupled",
+                                                              "FullyCoupledFlowDeformation", 6)}
 THERMAL_NAMES = {0: ("Ignore temperature", "IgnoreTemperature"), 1: ("Earth gradient", "EarthGradient"),
                  2: ("Use temperatures from previous phase", "UseTemperaturesFromPreviousPhase"),
                  3: ("Steady state thermal flow", "SteadyStateThermalFlow")}
@@ -183,14 +185,14 @@ class P2Mixin:
         if st["init"] is not None:
             ph0 = list(g_i.Phases)[0]
             try:
-                v = _set_names(g_i, ph0, "DeformCalcType", st["init"], INITIAL_NAMES)
+                v = _set_names(g_i, ph0, "DeformCalcType", st["init"], INITIAL_NAMES, raw=False)
             except Exception as e:  # noqa: BLE001
                 raise SolverError(f"Could not set the initial stress calculation: {e}")
             done.append(f"{_name(ph0)}: {v}")
         for name, code in st["calc"]:
             ph = self._phase(g_i, name)
             try:
-                v = _set_names(g_i, ph, "DeformCalcType", code, CALC_NAMES)
+                v = _set_names(g_i, ph, "DeformCalcType", code, CALC_NAMES, raw=False)
             except Exception as e:  # noqa: BLE001
                 raise SolverError(f"Could not set the calculation type of {name}: {e}")
             done.append(f"{name}: {v}")

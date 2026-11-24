@@ -488,6 +488,11 @@ SOIL_NAMES = {"gammaUnsat": "Unit weight γunsat [kN/m³]", "gammaSat": "Unit we
               "Gref": "Shear modulus Gref [kN/m²]", "kx": "Permeability kx [m/day]", "ky": "Permeability ky [m/day]"}
 
 
+def plaxis_model_calc(t) -> str:
+    from .plaxis_model import calc_type_name
+    return calc_type_name(t) if t not in (None, "") else ""
+
+
 def model_inputs(m: dict) -> dict:
     """The main inputs of the PLAXIS model, as tables for the report."""
     mats = {x["name"]: x for x in m.get("materials") or []}
@@ -501,7 +506,7 @@ def model_inputs(m: dict) -> dict:
     loads = [[ld["name"], (ld.get("kind") or "") + " load",
               "; ".join(f"{k} = {S.fmt(float(v))} {unit.get((ld['name'], k), '')}".strip() for k, v in (ld.get("props") or {}).items() if S._isnum(v)) or "⚠ no value",
               stages(ld["name"])] for ld in m.get("loads") or []]
-    phases = [[str(i), ph.get("id") or ph["name"], ph["name"], ph.get("type") or ""] for i, ph in enumerate(m.get("phases") or [])]
+    phases = [[str(i), ph.get("id") or ph["name"], ph["name"], plaxis_model_calc(ph.get("type"))] for i, ph in enumerate(m.get("phases") or [])]
     return {"soil": _soil_matrix(m), "structures": structs, "loads": loads, "phases": phases, "objects": model_objects(m),
             "mesh": m.get("mesh") or {}, "counts": m.get("counts") or {}, "checks": model_checks(m)}
 

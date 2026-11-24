@@ -121,7 +121,9 @@ def _run_task(task_id: str) -> None:
                     db.update_run(run["id"], attempts=attempts, error=err)
                     time.sleep(delay)
                 else:
-                    db.update_run(run["id"], status="failed", attempts=attempts, error=err)
+                    kept = getattr(solver, "last_applied", None)  # QA V26.1.9 D8: what the failed run set
+                    db.update_run(run["id"], status="failed", attempts=attempts, error=err,
+                                  **({"outputs": kept} if kept else {}))
 
     if _stop_asked(task_id):  # Stop pressed: the run in progress finished, the others wait for Restart
         for r in db.get_runs(task_id):

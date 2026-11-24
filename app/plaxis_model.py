@@ -188,6 +188,31 @@ def _v(x):
         return x
 
 
+# QA V26.1.9 D1: PLAXIS 3D 2024.3 gives the calculation type of a phase as a number (1 K0 procedure, 4 Plastic,
+# 7 Safety on UA-22); the other numbers follow the order of the PLAXIS list (to confirm on PLAXIS, QA/QC)
+CALC_TYPE_CODES = {1: "K0 procedure", 2: "Gravity loading", 3: "Field stress", 4: "Plastic", 5: "Consolidation",
+                   6: "Fully coupled flow-deformation", 7: "Safety", 8: "Dynamic", 9: "Dynamic with consolidation"}
+
+
+def is_safety_phase(ph: dict) -> bool:
+    """A phase of the read model (dict) that is a safety phase, by its type (name or PLAXIS number) or its name."""
+    return "safety" in f"{calc_type_name(ph.get('type', ''))} {ph.get('id', '')}".lower()
+
+
+def calc_type_name(x) -> str:
+    """The calculation type of a phase as a name, whether PLAXIS gives the name or its number."""
+    v = _v(x)
+    t = str(v if v is not None else "").strip()
+    if isinstance(v, bool):
+        return t
+    if isinstance(v, (int, float)) or t.isdigit():
+        try:
+            return CALC_TYPE_CODES.get(int(float(t)), t)
+        except ValueError:
+            return t
+    return t
+
+
 def _num(x):
     try:
         v = float(_v(x))
@@ -218,6 +243,45 @@ def _xyz(p, is_3d: bool):
     if x is None or y is None:
         return None
     return [x, y, (_num(getattr(p, "z", None)) or 0.0) if is_3d else 0.0]
+
+
+def read_boreholes(g_i, is_3d: bool) -> list[dict]:
+    """The boreholes and their soil layers (top, bottom, material), read in Soil mode."""
+    out = []
+    holes = _list(g_i, "Boreholes")
+    layers = _list(g_i, "Soillayers")
+    for bi, bh in enumerate(holes):
+        rec = {"name": _name(bh), "x": _num(bh.x) or 0.0, "y": (_num(getattr(bh, "y", None)) or 0.0) if is_3d else 0.0,
+               "head": _num(getattr(bh, "Head", None)), "layers": []}
+        for li, layer in enumerate(layers):
+            try:
+                zone = list(layer.Zones)[bi]
+            except Exception:  # noqa: BLE001
+                continue
+            top = bot = None
+            for t in (lambda z: z.Top, lambda z: z.Top.z, lambda z: z.Top.y):
+                try:
+                    top = _num(t(zone))
+                    if top is not None:
+                        break
+                except Exception:  # noqa: BLE001
+                    continue
+            for b in (lambda z: z.Bottom, lambda z: z.Bottom.z, lambda z: z.Bottom.y):
+                try:
+                    bot = _num(b(zone))
+                    if bot is not None:
+                        break
+                except Exception:  # noqa: BLE001
+                    continue
+            soil_mat = ""
+            try:
+                soil_mat = _name(_v(layer.Soil.Material))
+            except Exception:  # noqa: BLE001
+                pass
+            if top is not None and bot is not None:
+                rec["layers"].append({"name": _name(layer), "material": soil_mat, "top": top, "bottom": bot})
+        out.append(rec)
+    return out
 
 
 def _obj_points(obj, is_3d: bool) -> list:
@@ -373,38 +437,7 @@ def extract(s_i, g_i) -> dict:
     except Exception:  # noqa: BLE001
         pass
     holes = _list(g_i, "Boreholes")
-    layers = _list(g_i, "Soillayers")
-    for bi, bh in enumerate(holes):
-        rec = {"name": _name(bh), "x": _num(bh.x) or 0.0, "y": (_num(getattr(bh, "y", None)) or 0.0) if is_3d else 0.0,
-               "head": _num(getattr(bh, "Head", None)), "layers": []}
-        for li, layer in enumerate(layers):
-            try:
-                zone = list(layer.Zones)[bi]
-            except Exception:  # noqa: BLE001
-                continue
-            top = bot = None
-            for t in (lambda z: z.Top, lambda z: z.Top.z, lambda z: z.Top.y):
-                try:
-                    top = _num(t(zone))
-                    if top is not None:
-                        break
-                except Exception:  # noqa: BLE001
-                    continue
-            for b in (lambda z: z.Bottom, lambda z: z.Bottom.z, lambda z: z.Bottom.y):
-                try:
-                    bot = _num(b(zone))
-                    if bot is not None:
-                        break
-                except Exception:  # noqa: BLE001
-                    continue
-            soil_mat = ""
-            try:
-                soil_mat = _name(_v(layer.Soil.Material))
-            except Exception:  # noqa: BLE001
-                pass
-            if top is not None and bot is not None:
-                rec["layers"].append({"name": _name(layer), "material": soil_mat, "top": top, "bottom": bot})
-        m["boreholes"].append(rec)
+    m["boreholes"] += read_boreholes(g_i, is_3d)
     if not holes:
         notes.append("No boreholes found: the soil layers come from the soil polygons only.")
 
@@ -430,7 +463,7 @@ def extract(s_i, g_i) -> dict:
             if val is not None:
                 settings["Deform." + prop] = val
         m["phases"].append({"name": _name(ph), "id": str(_v(getattr(ph, "Identification", "")) or _name(ph)),
-                            "type": str(_v(getattr(ph, "DeformCalcType", "")) or ""), "settings": settings,
+                            "type": calc_type_name(getattr(ph, "DeformCalcType", "")), "settings": settings,
                             "pore": str(_v(getattr(ph, "PorePresCalcType", "")) or ""),
                             "thermal": str(_v(getattr(ph, "ThermalCalcType", "")) or "")})
     staged = []
@@ -981,7 +1014,7 @@ def _code_value(values: list[str], current) -> str:
 
 def _stage_phases(m: dict) -> list[dict]:
     """The construction stages (not the initial phase, not a safety phase)."""
-    return [ph for ph in (m.get("phases") or [])[1:] if "safety" not in f"{ph.get('type', '')} {ph.get('id', '')}".lower()]
+    return [ph for ph in (m.get("phases") or [])[1:] if not is_safety_phase(ph)]
 
 
 def host_of(m: dict, pts: list) -> str:
@@ -992,6 +1025,33 @@ def host_of(m: dict, pts: list) -> str:
         if mine and mine <= {key(q) for q in st.get("points") or []}:
             return st["name"]
     return ""
+
+
+def adjacent_soil(m: dict, itf: dict) -> str:
+    """QA V26.1.9 D4: the soil an interface 'from adjacent soil' takes its properties from: the layer at the mid level
+    of the interface (or of the structure it lies along); in 2D the soil polygon next to it on its side."""
+    pts = itf.get("points") or next((st.get("points") for st in m.get("structures") or []
+                                     if st["name"] == host_of(m, itf.get("points"))), None) or []
+    if m.get("version") != "3d" and len(pts) >= 2 and m.get("soil_polygons"):
+        (x1, y1), (x2, y2) = [(float(q[0]), float(q[1])) for q in pts[:2]]
+        mx, my = (x1 + x2) / 2, (y1 + y2) / 2
+        L = math.hypot(x2 - x1, y2 - y1) or 1.0
+        nx, ny = -(y2 - y1) / L, (x2 - x1) / L  # PLAXIS: the positive side is on the left of the line
+        sgn = -1.0 if itf.get("side") == "negative" else 1.0
+        for d in (0.05, 0.25, 1.0):
+            px, py = mx + sgn * nx * d, my + sgn * ny * d
+            for sp in m["soil_polygons"]:
+                if _inside(px, py, [(float(q[0]), float(q[1])) for q in sp.get("points") or []]):
+                    return sp.get("material") or ""
+    return soil_at(m, pts)
+
+
+def _inside(x: float, y: float, poly: list) -> bool:
+    inside = False
+    for (x1, y1), (x2, y2) in zip(poly, poly[1:] + poly[:1]):
+        if (y1 > y) != (y2 > y) and x < x1 + (y - y1) * (x2 - x1) / ((y2 - y1) or 1e-12):
+            inside = not inside
+    return inside
 
 
 def soil_at(m: dict, pts: list) -> str:
@@ -1030,7 +1090,7 @@ def p1_structures(m: dict, add) -> None:
                 "; ".join(f"{a['name']}.PrestressForce@{ph['name']}" for a in anchors), "kN", float(cur))
     for itf in m.get("interfaces") or []:
         host = host_of(m, itf.get("points"))
-        base = itf.get("material") if "custom" in str(itf.get("mode") or "").lower() and itf.get("material") else soil_at(m, itf.get("points"))
+        base = itf.get("material") if "custom" in str(itf.get("mode") or "").lower() and itf.get("material") else adjacent_soil(m, itf)
         bmat = next((x for x in m.get("materials") or [] if x["name"] == base), {})
         grp = f"Interface · {itf['name']}" + (f" along {host}" if host else "")
         for prop, lab, unit, dflt in (("Rinter", "strength reduction Rinter", "-", 1.0), ("DeltaInter", "virtual thickness factor δinter", "-", 0.1)):
@@ -1064,7 +1124,7 @@ def p1_flow(m: dict, add) -> None:
                     f"{cl} water condition in {ph['name']}", f"{cl}.WaterCondition@{ph['name']}", "",
                     CLUSTER_CONDITIONS[0], kind="values", values=list(CLUSTER_CONDITIONS))
     for ph in (m.get("phases") or []):
-        if "safety" in f"{ph.get('type', '')} {ph.get('id', '')}".lower():
+        if is_safety_phase(ph):
             continue
         add(f"pore:{ph['name']}", "flow", "Groundwater flow calculation",
             f"Pore pressure calculation in {ids.get(ph['name'], ph['name'])}", f"{ph['name']}.PorePresCalcType", "",
@@ -1560,7 +1620,7 @@ def p2_candidates(m: dict, add) -> None:
             f"{describe({'name': ln['name'], 'kind': 'line', 'points': [toe, top]})} height (angle kept)",
             f"{top}.{axes[vi]}+~{h0:.6g}; {top}.x+*{sx / math.tan(math.radians(ang)):.6g}~{h0:.6g}", "m", round(h0, 4))
     # 3. staged fill / excavation sequence: the stage a soil cluster is placed in or excavated in
-    stages = [ph for ph in (m.get("phases") or [])[1:] if "safety" not in f"{ph.get('type', '')} {ph.get('id', '')}".lower()]
+    stages = [ph for ph in (m.get("phases") or [])[1:] if not is_safety_phase(ph)]
     clusters = m.get("clusters") or []
     if stages and len(clusters) <= 60:
         vals = ["as in the model: 0"] + [f"{_stage_label(ph)}: {i}" for i, ph in enumerate(stages, 1)]
@@ -1582,11 +1642,11 @@ def p2_candidates(m: dict, add) -> None:
     ph0 = (m.get("phases") or [None])[0]
     if ph0:
         it = INITIAL_TYPES[v]
-        cur = next((x for x in it if x.split(":")[0].lower() in str(ph0.get("type") or "").lower()), it[0])
+        cur = next((x for x in it if x.split(":")[0].lower() in calc_type_name(ph0.get("type")).lower()), it[0])
         add("init:calc", "stages", "Initial stresses", "Initial stress calculation (initial phase)",
             f"{ph0['name']}.InitialCalcType", "", cur, kind="values", values=list(it))
     for ph in stages:
-        cur = next((x for x in CALC_TYPES if x.split(":")[0].lower() in str(ph.get("type") or "").lower()), CALC_TYPES[0])
+        cur = next((x for x in CALC_TYPES if x.split(":")[0].lower() in calc_type_name(ph.get("type")).lower()), CALC_TYPES[0])
         add(f"calc:{ph['name']}", "stages", "Calculation type per stage", f"Calculation type of {ids[ph['name']]}",
             f"{ph['name']}.CalcType", "", cur, kind="values", values=list(CALC_TYPES))
         add(f"lfactor:@{ph['name']}", "stages", "Load factor per stage (scenarios)", f"Load factor in {ids[ph['name']]} (all loads)",

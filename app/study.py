@@ -32,7 +32,8 @@ MODES = {
                   "hint": "Calculate the existing design once and report its results in full detail."},
 }
 DOMAINS = {"geometry": "Geometry", "structures": "Structures", "loads": "Loads", "soil": "Soil",
-           "water": "Water conditions", "mesh": "Mesh", "stages": "Stages", "thermal": "Thermal"}
+           "water": "Water conditions", "mesh": "Mesh", "stages": "Stages", "thermal": "Thermal",
+           "features": "PLAXIS features"}
 OUT_DOMAINS = {"safety": "Safety", "displacements": "Displacements", "forces": "Structural forces",
                "water": "Pore pressure and flow", "points": "Results at chosen points", "dynamics": "Dynamics",
                "thermal": "Thermal"}
@@ -47,6 +48,8 @@ def domain_of(c: dict) -> str:
         return "loads"
     if k.startswith("thermal:"):
         return "thermal"
+    if k.startswith(("prestress:", "design:", "iface:", "add:", "addshift:", "dyn:", "contraction:")):
+        return "features"  # QA V26.1.9 D14: the PLAXIS features of the study grouped in section 2
     return {"soil": "soil", "flow": "water", "mesh": "mesh", "stages": "stages", "thermal": "thermal"}.get(c["section"], "structures")
 
 
@@ -113,7 +116,7 @@ def catalog(m: dict, s: dict | None = None) -> dict:
         params.append(p)
     outs = [{**o, "domain": out_domain(o["key"])} for o in all_outputs(m, s) if out_domain(o["key"])]
     phases = [{"name": name, "label": lab, "day": d} for name, (d, lab) in schedule(m, {}).items()]
-    allph = [{"name": ph["name"], "label": ph.get("id") or ph["name"], "type": ph.get("type") or ""}
+    allph = [{"name": ph["name"], "label": ph.get("id") or ph["name"], "type": plaxis_model.calc_type_name(ph.get("type")) if ph.get("type") not in (None, "") else ""}
              for ph in (m.get("phases") or [])]
     mats = [{"name": x["name"], "id": x.get("id") or x["name"], "kind": x["kind"]} for x in m.get("materials") or []]
     return {"modes": MODES, "domains": DOMAINS, "out_domains": OUT_DOMAINS, "operators": OPERATORS,
@@ -216,7 +219,7 @@ def _phase_for(o: dict, m: dict) -> str:
     if o.get("phase_hint") == "dynamic":
         return features.DYNAMIC_PHASE
     if o.get("phase_hint") == "safety":
-        return next((ph["name"] for ph in m.get("phases") or [] if "safety" in f"{ph.get('type', '')} {ph.get('id', '')}".lower()), "")
+        return next((ph["name"] for ph in m.get("phases") or [] if plaxis_model.is_safety_phase(ph)), "")
     return ""
 
 
@@ -387,6 +390,18 @@ def build(m: dict, study: dict) -> dict:
                     at(key, d, name, lab)
         if series and not any(t.get("measured") is not None and not t.get("time") for t in targets):
             errors[:] = [e for e in errors if "measured result" not in e]
+    # QA V26.1.9 D3 / D9: a result point and the dynamic phase give their results without ticking them separately
+    if mode != "calibration" and not screening:
+        fo0 = features.clean(s)
+        have = {t["key"] for t in targets}
+        auto = [f"probe{i}:utot" for i in range(len(fo0["probes"])) if not any(k.startswith(f"probe{i}:") for k in have)]
+        if fo0["dynamic"]["on"] and not any(k.startswith("dyn_") for k in have):
+            auto += ["dyn_ax", "dyn_ux"]
+        for key in auto:
+            add_target(key, extra={"auto": True})
+        warnings += features.probe_checks(m, s)  # QA V26.1.9 D7: each result point checked before the runs
+        if auto:
+            warnings.append("Read as well (PLAXIS features of the study): " + ", ".join(outs[k]["label"] for k in auto if k in outs) + ".")
     # QA V26.1.8: a factor of safety needs a safety phase. Without one PLAXIS gives ΣMsf = 1 for the last phase, which
     # was reported as "FoS 1" (reporting) or failed every optimization run after 10 minutes of calculation.
     # V26.1.9: a safety phase added by OPTIMUS after chosen stages: the factor of safety of each of those stages
@@ -405,7 +420,7 @@ def build(m: dict, study: dict) -> dict:
                             **({k: proto[k] for k in ("how", "ref", "lo", "hi", "control", "measured", "detector") if k in proto} if proto else {})})
         for i, t in enumerate(targets, 1):
             t["name"] = f"T{i}"
-    has_safety = bool(after) or any("safety" in f"{ph.get('type', '')} {ph.get('id', '')}".lower() for ph in m.get("phases") or [])
+    has_safety = bool(after) or any(plaxis_model.is_safety_phase(ph) for ph in m.get("phases") or [])
     if m.get("phases") and not has_safety and any(t["key"] == "fos" for t in targets):
         if any(t["key"] == "fos" and t["operator"] != "report" for t in targets) or mode == "calibration":
             errors.append("The factor of safety needs a safety phase, and this model has none: add a safety phase in "
@@ -578,7 +593,7 @@ def schedule(m: dict, tm: dict) -> dict:
     given = (tm or {}).get("days") or {}
     out, d = {}, 0.0
     for ph in (m.get("phases") or [])[1:]:
-        if "safety" in f"{ph.get('type', '')} {ph.get('id', '')}".lower():
+        if plaxis_model.is_safety_phase(ph):
             continue
         g = _f(given.get(ph["name"]))
         d = g if g is not None else d + 30.0
@@ -961,11 +976,12 @@ def results(task: dict, runs: list[dict], previous: list[dict] | None = None) ->
         st = [t for t in targets if t.get("stage")]
         if st and ok:
             o0 = ok[0]["outputs"] or {}
-            phases = list(dict.fromkeys(t["phase_label"] for t in st))
+            lab = lambda t: t.get("phase_label") or t.get("phase") or "last phase"  # QA V26.1.9 D2: no KeyError
+            phases = list(dict.fromkeys(lab(t) for t in st))
             tab = {}
             for t in st:
                 e = tab.setdefault(t["key"], {"label": t.get("base_label") or t["label"], "unit": t["unit"], "values": {}})
-                e["values"][t["phase_label"]] = o0.get(t["name"])
+                e["values"][lab(t)] = o0.get(t["name"])
             out["stages"] = {"phases": phases, "rows": list(tab.values())}
     out["stats"] = statistics(main_t, ok)
     if any(t.get("time") for t in targets):  # V26.1.8: every chosen result over time (stage dates, long term)

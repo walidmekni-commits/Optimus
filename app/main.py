@@ -1248,7 +1248,7 @@ def _stage_targets(outs: list[dict], m: dict) -> list[dict]:
     safety in the safety phases, the other results in the other phases (not the initial phase)."""
     out, i = [], 0
     for ph in (m.get("phases") or [])[1:]:
-        safe = "safety" in f"{ph.get('type', '')} {ph.get('id', '')}".lower()
+        safe = plaxis_model.is_safety_phase(ph)
         for o in outs:
             if (o["key"] == "fos") != safe:
                 continue
@@ -1263,7 +1263,7 @@ def _stage_targets(outs: list[dict], m: dict) -> list[dict]:
 def _stages_view(t: dict, outs: dict, setup: dict, m: dict) -> dict:
     """The summary table: each main result at each stage, with what is missing (not read, or no such item)."""
     st = [tg for tg in t["plan"]["targets"] if tg.get("stage")]
-    phases = [{"name": ph["name"], "label": ph.get("id") or ph["name"], "safety": "safety" in f"{ph.get('type', '')} {ph.get('id', '')}".lower()}
+    phases = [{"name": ph["name"], "label": ph.get("id") or ph["name"], "safety": plaxis_model.is_safety_phase(ph)}
               for ph in (m.get("phases") or [])[1:]]
     has = {k: bool(v) for k, v in {
         "plate": [s for s in m.get("structures") or [] if s.get("kind") == "plate"],
@@ -1493,7 +1493,11 @@ def _start_study_task(p, s, variables, targets, runs, first, offset, previous):
         plan_data["features"] = features.solver_options(m, s)
     # V26.1.8: a Soft Soil Creep study calculates every run, Run 0 included, with gravity loading in the initial
     # phase: the full run of the Original File (K0 procedure) is then not comparable and is not taken over
-    if any(not (r.get("inputs") or {}) for r in runs) and not study.needs_gravity_initial({"variables": variables}, runs):
+    # QA V26.1.9 D3: a study whose features add phases in every run (safety phases, a dynamic phase) calculates Run 0
+    # too: the full run of the Original File has none of them (a dynamic study was reported 'succeeded' without one)
+    adds_phases = bool((plan_data.get("features") or {}).get("safety_after") or (plan_data.get("features") or {}).get("dynamic"))
+    if any(not (r.get("inputs") or {}) for r in runs) and not adds_phases and \
+            not study.needs_gravity_initial({"variables": variables}, runs):
         base = _baseline_from_basic(p, targets)
         if base:
             plan_data["baseline"] = base
