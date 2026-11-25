@@ -297,3 +297,70 @@ def test_n2_errors_that_repeat_are_not_retried():
     for e in ("ConnectionError: PLAXIS did not answer", "requests.exceptions.ReadTimeout: timed out",
               "PermissionError: [WinError 32] The process cannot access the file because it is being used by another process"):
         assert not S.deterministic(e), e
+
+
+# re-test N1 (UA-22, PLAXIS 3D 2024.3): the Polygon's own x, y, z is where its local points start; AxisVector 0, 0, 0
+def test_n1_polygon_origin_added_to_its_local_points():
+    import types
+    P = lambda x, y, z: types.SimpleNamespace(x=x, y=y, z=z)  # noqa: E731
+
+    class Poly:  # a PLAXIS Polygon: iterable over its local points, not a list
+        def __init__(self, pts):
+            self._pts = pts
+
+        def __iter__(self):
+            return iter(self._pts)
+
+    def poly(org, pts, cog):
+        p = Poly([P(*q) for q in pts])
+        p.x, p.y, p.z = org
+        p.PlaneDefinition, p.AxisVectorX, p.AxisVectorY, p.AxisVectorZ = 0, 0, 0, 0
+        p.CenterOfGravity = P(*cog)
+        return p
+    p1 = poly((20, -12, -11.5), [(0, 0, 0), (0, 12, 0), (0, 12, 13.5), (0, 0, 13.5)], (20, -6, -4.75))
+    p2 = poly((21, -12, 2), [(0, 0, 0), (14, 0, 0), (14, 12, 0), (0, 12, 0)], (28, -6, 2))
+    plate, load = types.SimpleNamespace(Parent=p1), types.SimpleNamespace(Parent=p2)
+    m = {"version": "3d", "points": [], "notes": [], "contractions": [], "displacements": [],
+         "boreholes": [{"name": "BH_1", "x": 0, "y": 0, "layers": [{"name": "L1", "material": "Fill", "top": 2, "bottom": -3},
+                                                                  {"name": "L2", "material": "Sand", "top": -3, "bottom": -30}]}]}
+    a = plaxis_model._surface_points(plate, p1, True)
+    b = plaxis_model._surface_points(load, p2, True)
+    m["structures"] = [{"kind": "plate", "name": "Plate_1", "points": a[0], "_alts": a, "_cog": plaxis_model._cog(plate, p1)}]
+    m["interfaces"] = [{"name": "PositiveInterface_1", "side": "positive", "points": a[0], "_alts": list(a),
+                        "_cog": plaxis_model._cog(plate, p1)}]
+    m["loads"] = [{"kind": "surface", "name": "SurfaceLoad_1", "props": {}, "points": b[0], "_alts": b,
+                   "_cog": plaxis_model._cog(load, p2)}]
+    plaxis_model._resolve_globals(m)
+    wall, sl = m["structures"][0]["points"], m["loads"][0]["points"]
+    assert {q[0] for q in wall} == {20} and sorted({q[1] for q in wall}) == [-12, 0] and sorted({q[2] for q in wall}) == [-11.5, 2]
+    assert sorted({q[0] for q in sl}) == [21, 35] and sorted({q[1] for q in sl}) == [-12, 0] and {q[2] for q in sl} == {2}
+    assert not m["notes"] and plaxis_model.adjacent_soil(m, m["interfaces"][0]) == "Sand"
+    plaxis_model.finish(m)
+    assert m["extents"]["zmax"] == pytest.approx(2)
+
+
+# re-test N5: the quality chapter of a 3D model with soil clusters (their names) and a failed run that kept only
+# _soil_models; and a run that is not retried is calculated once (N2: the missing break)
+def test_n5_quality_with_clusters_and_a_failed_run(client, monkeypatch):
+    from app import db, exports, solvers
+    m = plaxis_model.demo("3d")
+    m["clusters"] = ["Soil_1_1", "Soil_2_1"]
+    assert "Soil_1_1" in exports.model_objects(m)[-1][2]
+    pid, prev = _setup(client, "combinations", params=[{"item": "mat:Clay.phi", "min": 22, "max": 30}], outputs=["utot"], runs=2)
+    p = db.get_project(pid)
+    db.update_project(pid, setup={**p["setup"], "plaxis_model": {**p["setup"]["plaxis_model"], "clusters": ["Soil_1_1"]}})
+    real, n = solvers.SimulatedSolver.run, {"k": 0}
+
+    def run(self, *a, **k):
+        n["k"] += 1
+        if n["k"] == 2:
+            self.last_applied = {"_soil_models": ["L2MedDenseSand: drainage type Undrained (A)"]}
+            raise solvers.SolverError("Phase Phase_3 failed: the soil body seems to collapse (PLAXIS LogInfo 101)")
+        self.last_applied = None
+        return real(self, *a, **k)
+    monkeypatch.setattr(solvers.SimulatedSolver, "run", run)
+    tid = client.post(f"/api/projects/{pid}/study/run").json()["id"]
+    out = client.get(f"/api/tasks/{tid}/study").json()
+    assert n["k"] == 2 and [r["status"] for r in out["rows"]] == ["succeeded", "failed"]
+    from tests.test_workflow import events
+    assert out.get("quality") and "quality" not in events(client, pid), "the quality chapter failed"

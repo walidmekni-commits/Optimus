@@ -381,6 +381,9 @@ def _surface_points(o, parent, is_3d: bool) -> list[list]:
         pts = raw if src is parent else (_obj_points(o, True) if o is not parent else [])
         if not pts:
             continue
+        org = _xyz(src, True)  # re-test N1 (UA-22): the Polygon's own x, y, z is where its local points start
+        if org and any(org):
+            cands.append([[round(q[i] + org[i], 6) for i in range(3)] for q in pts])
         fr = _frame(src)
         if fr:
             cands += _to_global(pts, fr)
@@ -416,6 +419,37 @@ def _plane_hits(poly: list, ends: list, tol: float = 0.05) -> int:
     return hits
 
 
+def _cog(o, parent):
+    """PLAXIS' centre of gravity of a surface (Polygon.CenterOfGravity), the check of its reading (re-test N1)."""
+    for src in (parent, o):
+        for n in ("CenterOfGravity", "CentreOfGravity", "COG"):
+            try:
+                v = _vec(src, n)
+            except Exception:  # noqa: BLE001
+                v = None
+            if v:
+                return v
+    return None
+
+
+def _centre(pts: list) -> list:
+    """The centre of a polygon (area-weighted, in its plane; the mean of its corners when degenerate)."""
+    mean = [sum(q[k] for q in pts) / len(pts) for k in range(3)]
+    if len(pts) < 3:
+        return mean
+    tot, acc = 0.0, [0.0, 0.0, 0.0]
+    p0 = pts[0]
+    for i in range(1, len(pts) - 1):
+        a = [pts[i][k] - p0[k] for k in range(3)]
+        b = [pts[i + 1][k] - p0[k] for k in range(3)]
+        cr = [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]
+        ar = math.sqrt(sum(x * x for x in cr)) / 2
+        c = [(p0[k] + pts[i][k] + pts[i + 1][k]) / 3 for k in range(3)]
+        tot += ar
+        acc = [acc[k] + ar * c[k] for k in range(3)]
+    return [acc[k] / tot for k in range(3)] if tot > 1e-12 else mean
+
+
 def _resolve_globals(m: dict) -> None:
     """N1: of the readings of each surface, the one that meets the anchors / beams and lies in the ground."""
     ends = [list(map(float, (list(q) + [0.0])[:3])) for st in m["structures"] if len(st.get("points") or []) == 2
@@ -426,10 +460,13 @@ def _resolve_globals(m: dict) -> None:
     for coll in ("structures", "interfaces", "loads", "contractions", "displacements"):
         for it in m.get(coll) or []:
             alts = it.pop("_alts", None)
+            cog = it.pop("_cog", None)
             if not alts:
                 continue
 
             def score(c):
+                if cog and len(c) >= 3 and math.dist(_centre(c), cog) < 0.05:  # PLAXIS' own centre of gravity
+                    return 1e6
                 if top is None:
                     return _plane_hits(c, ends)
                 if coll == "loads":  # a surface load lies on the ground
@@ -563,7 +600,7 @@ def extract(s_i, g_i) -> dict:
             parent = getattr(o, "Parent", o)
             alts = _surface_points(o, parent, is_3d)
             m["structures"].append({"kind": kind, "name": _name(o), "material": mat_of(o), "points": alts[0],
-                                    **({"_alts": alts} if len(alts) > 1 or (is_3d and len(alts[0]) >= 3) else {})})
+                                    **({"_alts": alts, "_cog": _cog(o, parent)} if len(alts) > 1 or (is_3d and len(alts[0]) >= 3) else {})})
     # V26.1.9 (QA/QC missing features, P1): interfaces, tunnels, contractions, wells and drains
     for group, side in (("PositiveInterfaces", "positive"), ("NegativeInterfaces", "negative"), ("Interfaces", "")):
         for o in _list(g_i, group):
@@ -577,7 +614,7 @@ def extract(s_i, g_i) -> dict:
                 pass
             alts = _surface_points(o, parent, is_3d)
             m["interfaces"].append({"name": _name(o), "side": side, "mode": mode, "material": mat_of(o),
-                                    "points": alts[0], **({"_alts": alts} if is_3d else {})})
+                                    "points": alts[0], **({"_alts": alts, "_cog": _cog(o, parent)} if is_3d else {})})
     for o in _list(g_i, "Tunnels"):
         m["tunnels"].append({"name": _name(o)})
     for group in ("LineContractions", "SurfaceContractions", "Contractions"):
@@ -585,7 +622,7 @@ def extract(s_i, g_i) -> dict:
             parent = getattr(o, "Parent", o)
             alts = _surface_points(o, parent, is_3d)
             m["contractions"].append({"name": _name(o), "value": _num(getattr(o, "Cref", None)),
-                                      "points": alts[0], **({"_alts": alts} if is_3d else {})})
+                                      "points": alts[0], **({"_alts": alts, "_cog": _cog(o, parent)} if is_3d else {})})
     for group, coll, props in (("Wells", "wells", WELL_PROPS), ("Drains", "drains", DRAIN_PROPS)):
         for o in _list(g_i, group):
             parent = getattr(o, "Parent", o)
@@ -598,7 +635,7 @@ def extract(s_i, g_i) -> dict:
             parent = getattr(o, "Parent", o)
             alts = _surface_points(o, parent, is_3d)
             m["displacements"].append({"name": _name(o), "kind": kind, "props": props, "points": alts[0],
-                                       **({"_alts": alts} if is_3d else {})})
+                                       **({"_alts": alts, "_cog": _cog(o, parent)} if is_3d else {})})
     for group, kind in (("LineLoads", "line"), ("PointLoads", "point"), ("SurfaceLoads", "surface")):
         for o in _list(g_i, group):
             props = {}
@@ -610,7 +647,7 @@ def extract(s_i, g_i) -> dict:
             alts = _surface_points(o, parent, is_3d) if kind == "surface" else []
             m["loads"].append({"kind": kind, "name": _name(o), "props": props,
                                "points": alts[0] if alts else _obj_points(parent, is_3d) if kind != "point" else
-                               [q for q in [_xyz(parent, is_3d)] if q], **({"_alts": alts} if len(alts) > 1 else {})})
+                               [q for q in [_xyz(parent, is_3d)] if q], **({"_alts": alts, "_cog": _cog(o, parent)} if len(alts) > 1 else {})})
 
     # stratigraphy: boreholes and soil layer levels (Soil mode)
     try:

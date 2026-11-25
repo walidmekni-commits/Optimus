@@ -533,7 +533,7 @@ def model_objects(m: dict) -> list[list[str]]:
         rows.append([x["name"], f"prescribed displacement ({x.get('kind') or ''})".replace(" ()", ""),
                      "; ".join(f"{k} = {num(v)} m" for k, v in (x.get("props") or {}).items()) or "—"])
     if m.get("clusters"):
-        rows.append([f"{len(m['clusters'])} soil clusters", "soil clusters", ", ".join(c.get("name", "") for c in m["clusters"][:12])
+        rows.append([f"{len(m['clusters'])} soil clusters", "soil clusters", ", ".join(str(c.get("name", "") if isinstance(c, dict) else c) for c in m["clusters"][:12])
                      + (" …" if len(m["clusters"]) > 12 else "")])
     return rows
 
