@@ -107,18 +107,63 @@ def catalog(m: dict) -> dict:
 def default(mode: str) -> dict:
     return {"mode": mode if mode in MODES else "sensitivity", "params": [], "controls": [], "targets": [],
             "outputs": [], "measured": [], "geo": [], "detector": {"on": False, "fields": []},
+            "xaxis": {"kind": "time", "unit": "day"},
             "screen": {"on": False, "domain": "loads", "pct": 20, "shift": 1.0, "items": []}, "runs": 5, "distribution": "even", "baseline": True, "swap": True,
             "report": {"vis": ["figures", "tables", "output", "geometry"], "plots": ["utot", "ux"]}}
 
 
 def clean(study: dict | None, mode: str | None = None) -> dict:
     s = {**default(mode or (study or {}).get("mode") or "sensitivity"), **(study or {})}
+    s["xaxis"] = clean_xaxis(s.get("xaxis"))
     if mode:
         s["mode"] = mode
     s["runs"] = max(1, min(200, int(s.get("runs") or 1)))
     if s["distribution"] not in ("even", "custom"):
         s["distribution"] = "even"
     return s
+
+
+# --- the X-axis of the figures over time (V26.1.8 calibration: time in days / hours / minutes, stage, or a variable)
+XAXIS_KINDS = ("time", "stage", "variable")
+TIME_UNITS = {"day": 1.0, "h": 24.0, "min": 1440.0}  # how many of the unit in one day
+TIME_NAMES = {"day": "days", "h": "hours", "min": "minutes"}
+
+
+def clean_xaxis(x: dict | None) -> dict:
+    """{kind: time | stage | variable, unit: day | h | min (time), label, unit_label, values: {phase name: x}
+    (variable: e.g. the applied load of each load step of a pile test)}."""
+    x = x if isinstance(x, dict) else {}
+    out = {"kind": x.get("kind") if x.get("kind") in XAXIS_KINDS else "time",
+           "unit": x.get("unit") if x.get("unit") in TIME_UNITS else "day"}
+    if out["kind"] == "variable" or x.get("label") or x.get("values"):
+        out["label"] = str(x.get("label") or "").strip()[:80]
+        out["unit_label"] = str(x.get("unit_label") or "").strip()[:20]
+        vals = {}
+        for k, v in (x.get("values") or {}).items():
+            fv = _f(v)
+            if fv is not None:
+                vals[str(k)] = fv
+        out["values"] = vals
+    return out
+
+
+def xaxis_label(x: dict) -> str:
+    x = clean_xaxis(x)
+    if x["kind"] == "stage":
+        return "Construction stage"
+    if x["kind"] == "variable":
+        return (x.get("label") or "X") + (f" ({x['unit_label']})" if x.get("unit_label") else "")
+    return f"Time ({TIME_NAMES[x['unit']]})"
+
+
+def xaxis_errors(x: dict, m: dict) -> list[str]:
+    x = clean_xaxis(x)
+    if x["kind"] != "variable":
+        return []
+    out = [] if x.get("label") else ["X-axis: give the name of the variable (e.g. Applied load)."]
+    if not x.get("values"):
+        out.append("X-axis: give the value of the variable at one stage at least.")
+    return out
 
 
 # --- the runs -----------------------------------------------------------------------------------------------
@@ -333,7 +378,7 @@ def build(m: dict, study: dict) -> dict:
                 if d is None or v is None or not dates:
                     continue
                 dd, name, lab = min(dates, key=lambda x: abs(x[0] - d))
-                at(sr["output"], dd, name, lab, {"measured": v, "read_day": d})
+                at(sr["output"], dd, name, lab, {"measured": v, "read_day": d, "read_x": _f(pt.get("x"))})
         done = {sr["output"] for sr in series}
         keys = [k for k in (tm.get("outputs") or list(dict.fromkeys(t["key"] for t in targets if not t.get("time"))))
                 if k in outs and k not in ("fos", "file") and k not in done]
@@ -343,6 +388,8 @@ def build(m: dict, study: dict) -> dict:
                     at(key, d, name, lab)
         if series and not any(t.get("measured") is not None and not t.get("time") for t in targets):
             errors[:] = [e for e in errors if "measured result" not in e]
+    if tm.get("on") or series:  # the X-axis of the figures over time (a variable needs its name and values)
+        errors.extend(xaxis_errors(s.get("xaxis"), m))
     # QA V26.1.8: a factor of safety needs a safety phase. Without one PLAXIS gives ΣMsf = 1 for the last phase, which
     # was reported as "FoS 1" (reporting) or failed every optimization run after 10 minutes of calculation.
     has_safety = any("safety" in f"{ph.get('type', '')} {ph.get('id', '')}".lower() for ph in m.get("phases") or [])
@@ -513,15 +560,19 @@ def time_series(targets: list[dict], runs: list[dict]) -> list[dict]:
         if not t.get("time"):
             continue
         e = out.setdefault(t["key"], {"key": t["key"], "label": t.get("base_label") or t["label"], "unit": t["unit"],
-                                      "runs": {}, "measured": [], "stages": {}})
+                                      "runs": {}, "measured": [], "stages": {}, "phases": {}, "readings": []})
         e["stages"][t["day"]] = t.get("phase_label") or ""
+        e["phases"][t["day"]] = t.get("phase") or ""
         if _isnum(t.get("measured")):
             e["measured"].append((t.get("read_day", t["day"]), t["measured"]))
+            e["readings"].append({"day": t.get("read_day", t["day"]), "stage_day": t["day"], "x": t.get("read_x"),
+                                  "value": t["measured"]})
         for r in runs:
             v = (r.get("outputs") or {}).get(t["name"]) if r.get("status") == "succeeded" else None
             if _isnum(v):
                 e["runs"].setdefault(r.get("no"), []).append((t["day"], float(v)))
     for e in out.values():
+        e["phases"] = sorted(e["phases"].items())
         e["stages"] = sorted(e["stages"].items())
         e["runs"] = [{"run": no, "points": sorted(p)} for no, p in sorted(e["runs"].items(), key=lambda x: (x[0] is None, x[0]))]
     return list(out.values())
@@ -1204,13 +1255,51 @@ def chart_specs(task: dict, out: dict, runs_all: list[dict]) -> list[dict]:
                               "points": pts, "best": gv["governing_run"] if gv else None, "scenario": mode == "combinations"})
     best = (out.get("calibration") or {}).get("best_run") if mode == "calibration" else \
         (out.get("optimization") or {}).get("best_run") if mode == "optimize" else None
+    xa = clean_xaxis(s.get("xaxis"))
     for ts in out.get("time") or []:  # V26.1.8: each result over time, one line per run (+ the field readings)
-        specs.append({"kind": "time", "title": f"{ts['label']} over time" + (" against the field readings" if ts["measured"] else ""),
-                      "target": {"label": ts["label"], "unit": ts["unit"]}, "measured": ts["measured"],
-                      "stages": ts["stages"],
+        ax = on_xaxis(ts, xa)
+        what = {"time": "over time", "stage": "by construction stage"}.get(xa["kind"], f"against {xa.get('label') or 'X'}")
+        specs.append({"kind": "time", "title": f"{ts['label']} {what}" + (" against the field readings" if ts["measured"] else ""),
+                      "target": {"label": ts["label"], "unit": ts["unit"]}, "measured": ax["measured"],
+                      "stages": ax["stages"], "xlabel": xaxis_label(xa), "xticks": ax["xticks"],
                       "series": [{"label": f"Run {x['run']}", "run": x["run"], "points": x["points"], "best": x["run"] == best,
-                                  "existing": x["run"] == 0} for x in ts["runs"]]})
+                                  "existing": x["run"] == 0} for x in ax["runs"]]})
     return specs
+
+
+def on_xaxis(ts: dict, xa: dict) -> dict:
+    """One time_series() entry put on the chosen X-axis: the runs' points, the readings, the stage lines (time only)
+    and the tick labels (stage)."""
+    xa = clean_xaxis(xa)
+    days = [d for d, _ in ts["stages"]]
+    phase = dict(ts.get("phases") or [])
+    if xa["kind"] == "time":
+        f = TIME_UNITS[xa["unit"]]
+        x_of = lambda d: d * f
+        stages = [(d * f, lab) for d, lab in ts["stages"]]
+        xticks = None
+    elif xa["kind"] == "stage":
+        x_of = lambda d: float(days.index(d) + 1) if d in days else None
+        stages, xticks = [], [(float(i + 1), lab) for i, (_, lab) in enumerate(ts["stages"])]
+    else:
+        vals = xa.get("values") or {}
+        x_of = lambda d: vals.get(phase.get(d, ""))
+        stages, xticks = [], None
+    runs = []
+    for r in ts["runs"]:
+        pts = sorted((x_of(d), v) for d, v in r["points"] if x_of(d) is not None)
+        runs.append({**r, "points": pts})
+    meas = []
+    for rd in ts.get("readings") or [{"day": d, "stage_day": d, "x": None, "value": v} for d, v in ts["measured"]]:
+        if xa["kind"] == "time":
+            x = rd["day"] * TIME_UNITS[xa["unit"]]
+        elif xa["kind"] == "variable" and rd.get("x") is not None:
+            x = rd["x"]
+        else:
+            x = x_of(rd["stage_day"])
+        if x is not None:
+            meas.append((x, rd["value"]))
+    return {"runs": runs, "measured": sorted(meas), "stages": stages, "xticks": xticks}
 
 
 def _isnum(x) -> bool:

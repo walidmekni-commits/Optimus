@@ -60,6 +60,10 @@
   input[type=number] { width:6.5rem; text-align:right; }
   .meta { color:var(--muted); font-size:.85rem; }
   .err { background:var(--badbg); color:var(--bad); border-radius:.5rem; padding:.5rem .8rem; margin:.4rem 0; font-size:.9rem; }
+  #refBox { border:1px solid var(--line, #d0d7e2); border-radius:.6rem; padding:.6rem .8rem; margin:.2rem 0 .6rem; }
+  #refBox .err { white-space:pre-line; }
+  #refBox table { border-collapse:collapse; font-size:.85rem; margin:.4rem 0; } #refBox td, #refBox th { border:1px solid var(--line, #d0d7e2); padding:.2rem .45rem; text-align:left; vertical-align:top; }
+  #refBox details summary { cursor:pointer; font-weight:600; margin-top:.3rem; }
   .ok { color:var(--ok); }
   .seg { display:inline-flex; border:1px solid var(--line); border-radius:.5rem; overflow:hidden; flex:none; }
   .seg button { border:none; border-radius:0; padding:.2rem .7rem; background:var(--card); }
@@ -600,7 +604,7 @@
   <div class="cols top">
     <section class="card" id="outCard">
       <h2><span class="n">1</span><span id="outTitle"></span><span class="hint" id="outHint"></span></h2>
-      <div class="body"><div id="outSum"></div><div id="outList"></div><button class="add" id="addOut">+ Add</button> <button class="small ghost clr" data-clr="outs" title="Remove every control parameter">🧹 Clear All</button><div id="detBox"></div></div>
+      <div class="body"><div id="refBox" class="hidden"></div><div id="outSum"></div><div id="outList"></div><button class="add" id="addOut">+ Add</button> <button class="small ghost clr" data-clr="outs" title="Remove every control parameter">🧹 Clear All</button><div id="detBox"></div></div>
     </section>
     <div class="rightCol">
     <section class="card" id="stuCard">
@@ -1640,7 +1644,58 @@ function renderOuts() {
       <select class="out">${outOpts(o.domain, o.key)}</select><span class="sp"></span><button class="small del x" title="Delete this control parameter">🗑 Delete</button></div>
       ${body ? `<div class="pbody">${body}</div>` : ''}</div>`;
   }).join('') || `<p class="meta">Press <b>${esc(TXT[S.mode].add.replace('+ ', ''))}</b>, or tick a result in the summary table.</p>`;
-  renderDetector(); try { renderOutSum(); } catch (e) { console.error('outSum', e); }
+  renderDetector(); renderRef(); try { renderOutSum(); } catch (e) { console.error('outSum', e); }
+}
+/* Calibration / Back-analysis: the Reference Results uploaded as an Excel file (app/reference.py), or typed below */
+let REF_ERR = '';
+function renderRef() {
+  const box = $('#refBox'); if (!box) return;
+  box.classList.toggle('hidden', S.mode !== 'calibration');
+  if (S.mode !== 'calibration') { box.innerHTML = ''; return; }
+  const ref = S.reference;
+  box.innerHTML = `<b>Reference Results</b> <span class="meta">— type the measured values below, or upload them from an Excel or CSV file (.xlsx, .xls, .csv)</span><br>
+    <input type="file" id="refFile" accept=".xlsx,.xlsm,.xls,.csv" class="hidden">
+    <button class="small primary" id="refUp"${CAT ? '' : ' disabled title="Read the PLAXIS model first"'}>⬆ Upload Reference Results</button>
+    <a class="small" href="/api/reference-results-template.xlsx" download>⬇ Excel template</a> <a class="small" href="/api/reference-results-template.csv" download>⬇ CSV template</a>
+    ${ref ? `<button class="small ghost" id="refDel" title="Remove the file and the measured values and readings it gave">🗑 Remove file</button>
+      <p class="meta">📄 <b>${esc(ref.name || 'file')}</b> (${esc(ref.at || '')}): ${ref.rows} rows, ${ref.finals} final value${ref.finals === 1 ? '' : 's'} and ${ref.readings} reading${ref.readings === 1 ? '' : 's'} by stage or day. You can still edit the values below.</p>
+      ${(ref.warnings || []).map(w => `<p class="meta">⚠ ${esc(w)}</p>`).join('')}` : ''}
+    ${REF_ERR ? `<div class="err">${esc(REF_ERR)}</div>` : ''}
+    <details${REF_ERR ? ' open' : ''}><summary>File format guideline</summary>
+      <p class="meta"><b>CSV:</b> the same columns, header on the first line, values separated by commas, or by semicolons when the decimal separator is a comma (12,5). Save from Excel as <i>CSV UTF-8</i> (Windows-1252 also works). The same checks apply.</p>
+      <p class="meta">One table per file, on the sheet named <b>Reference Results</b> (else the first sheet). The first row is the header; column names are not case sensitive and can be in any order.</p>
+      <table><tr><th>Column</th><th></th><th>What to write</th></tr>
+        <tr><td>Result</td><td>required</td><td>The PLAXIS result: its key (<code>utot</code>, <code>wall_ux</code>, <code>anchor</code>…), its name in this list, or its PLAXIS name (<code>Utot_max</code>)</td></tr>
+        <tr><td>Value</td><td>required</td><td>The measured or benchmark value, a number</td></tr>
+        <tr><td>Unit</td><td>required</td><td>The unit of Value, of the same kind as the result: mm, cm, m · kN, MN · kN·m/m · kN/m · kPa, kN/m², MPa. Empty or – only for the factor of safety</td></tr>
+        <tr><td>Stage</td><td>optional</td><td>The construction stage of the reading (PLAXIS name or label), or <i>Long term</i></td></tr>
+        <tr><td>Day</td><td>optional</td><td>The day of the reading from the start of works</td></tr>
+        <tr><td>Time</td><td>optional</td><td>The time or duration of the reading, e.g. a pile load test in minutes: write the unit in the header, <i>Time (min)</i>, or in a <i>Time unit</i> column (min, h, day); else the unit of the X-axis below</td></tr>
+        <tr><td>X</td><td>optional</td><td>The value of the X-axis variable at the reading (e.g. the applied load): it goes on the stage whose value is nearest (X-axis: <i>Other variable</i>)</td></tr></table>
+      <table><tr><th>Result</th><th>Value</th><th>Unit</th><th>Stage</th><th>Day</th></tr>
+        <tr><td>Wall horizontal deflection</td><td>12.5</td><td>mm</td><td></td><td></td></tr>
+        <tr><td>Max anchor force</td><td>410</td><td>kN</td><td></td><td></td></tr>
+        <tr><td>wall_ux</td><td>4.1</td><td>mm</td><td></td><td>30</td></tr>
+        <tr><td>wall_ux</td><td>8.7</td><td>mm</td><td></td><td>60</td></tr>
+        <tr><td>Surface settlement (top of model)</td><td>9.8</td><td>mm</td><td>Long term</td><td></td></tr></table>
+      <p class="meta">A row with no Stage, Day, Time or X is the <b>final value</b> of the result (one per result). Any other row is a <b>reading</b> of the series, placed by the first of Day, Time, X, Stage that is filled in. Values are converted from their Unit into the units shown here. If any row is wrong, <b>nothing is loaded</b> and every wrong row is listed with its row number. A new file replaces the measured values and readings of the study.</p>
+    </details>`;
+  const f = $('#refFile');
+  $('#refUp').onclick = () => f.click();
+  f.onchange = async () => {
+    if (!f.files.length) return;
+    const fd = new FormData(); fd.append('file', f.files[0]);
+    try { await saveNow(); const r = await post(`/api/projects/${P.id}/study/reference`, fd);
+      REF_ERR = ''; S = {...r.study, geo: S.geo || r.study.geo || []}; PREV = r; renderAll(); renderTime(); renderSched();
+      toast(`Reference Results loaded: ${r.reference.finals} final values, ${r.reference.readings} readings.`);
+    } catch (e) { REF_ERR = e.message; renderRef(); }
+    f.value = '';
+  };
+  if (ref) $('#refDel').onclick = async () => {
+    try { const r = await api(`/api/projects/${P.id}/study/reference`, {method: 'DELETE'});
+      REF_ERR = ''; S = {...r.study, geo: S.geo || r.study.geo || []}; PREV = r; renderAll(); renderTime(); renderSched();
+    } catch (e) { REF_ERR = e.message; renderRef(); }
+  };
 }
 /* ============ SUMMARY TABLES: the Original File at a glance, with a tick to add an item ============ */
 let OSUM_D = null;
@@ -1911,22 +1966,48 @@ function prefillCustom() {
 }
 $('#baseline').onchange = () => { S.baseline = $('#baseline').checked; if (S.distribution === 'custom') renderParams(); save(); };
 $('#factorial').onchange = () => { S.factorial = $('#factorial').checked; save(); };
-/* V26.1.8: time in every module (stage dates, a long-term phase) and the field time series of a calibration */
+/* V26.1.8: time in every module (stage dates, a long-term phase) and the field time series of a calibration.
+   The X-axis of the figures over time: time in days / hours / minutes (e.g. a pile load test), the construction stage,
+   or another variable typed at each stage (e.g. the applied load). Dates are kept in days; shown in the chosen unit. */
+const XT = {day: [1, 'days'], h: [24, 'hours'], min: [1440, 'minutes']};
+function schedDays() {  // the date (days) of each stage, as app.study.schedule()
+  const t = S.time || {}, out = {}; let d = 0;
+  ((CAT && CAT.phases) || []).forEach(p => { const g = (t.days || {})[p.name]; d = g != null && g !== '' ? +g : d + 30; out[p.name] = d; });
+  return out;
+}
 function renderTime() {
   const t = S.time = S.time || {on: false, longterm: 365, days: {}}, cal = S.mode === 'calibration';
+  const xa = S.xaxis = S.xaxis || {kind: 'time', unit: 'day'}, f = xa.kind === 'time' ? XT[xa.unit || 'day'][0] : 1, un = xa.kind === 'time' ? XT[xa.unit || 'day'][1] : 'days';
+  const r6 = x => +(+x).toPrecision(6);
   $('#timeOn').checked = !!t.on; $('#ltDays').value = t.longterm ?? 365;
   $('#ltWrap').classList.toggle('hidden', !(t.on || (cal && (S.series || []).length)));
   const box = $('#timeBox'), phases = ((CAT && CAT.phases) || []);
   box.classList.toggle('hidden', !t.on && !cal);
   if (!t.on && !cal) { box.innerHTML = ''; return; }
   const sr = (S.series || [])[0] || {output: 'wall_ux', points: []};
-  box.innerHTML = (t.on && phases.length ? `<p class="meta">Date of each stage (days from the start of works; empty = 30 days after the one before):</p><div class="chips2">${phases.map(p => `<label>${esc(p.label)} <input type="number" class="tday" data-p="${esc(p.name)}" value="${esc((t.days || {})[p.name] ?? '')}" style="width:4.5rem"></label>`).join('')}</div>` : '')
-    + (cal ? `<p class="meta"><b>Field readings (benchmark)</b>: one reading per line, "day, value" in PLAXIS units (m, kN…); each reading is compared with the stage nearest its date, or the long-term phase.</p>
+  const isVar = xa.kind === 'variable', vals = xa.values || {};
+  const opt = (v, lab, on) => `<option value="${v}"${on ? ' selected' : ''}>${lab}</option>`;
+  const axis = `<p class="meta"><b>X-axis of the figures</b>
+      <select id="xKind">${opt('time:day', 'Time (days)', xa.kind === 'time' && xa.unit === 'day')}${opt('time:h', 'Time (hours)', xa.kind === 'time' && xa.unit === 'h')}${opt('time:min', 'Time / duration (minutes)', xa.kind === 'time' && xa.unit === 'min')}${opt('stage', 'Construction stage', xa.kind === 'stage')}${opt('variable', 'Other variable (e.g. applied load of a pile test)…', isVar)}</select>
+      ${isVar ? `<input id="xLab" placeholder="name, e.g. Applied load" value="${esc(xa.label || '')}" style="width:11rem"> <input id="xUnit" placeholder="unit, e.g. kN" value="${esc(xa.unit_label || '')}" style="width:5rem">` : ''}</p>
+    ${isVar && phases.length ? `<p class="meta">Value of ${esc(xa.label || 'the variable')} at each stage (e.g. the load of each load step):</p><div class="chips2">${phases.map(p => `<label>${esc(p.label)} <input type="number" step="any" class="xval" data-p="${esc(p.name)}" value="${esc(vals[p.name] ?? '')}" style="width:5rem"></label>`).join('')}</div>` : ''}`;
+  const sd = schedDays();
+  const ptxt = p => isVar && p.x != null ? `${p.x}, ${p.value}` : `${r6(p.day * f)}, ${p.value}`;
+  const days = t.days || {};
+  box.innerHTML = axis + (t.on && phases.length ? `<p class="meta">Date of each stage (${un} from the start; empty = 30 days after the one before):</p><div class="chips2">${phases.map(p => `<label>${esc(p.label)} <input type="number" step="any" class="tday" data-p="${esc(p.name)}" value="${esc(days[p.name] != null ? r6(days[p.name] * f) : '')}" style="width:4.5rem"></label>`).join('')}</div>` : '')
+    + (cal ? `<p class="meta"><b>Field readings (benchmark)</b>: one reading per line, "${isVar ? esc(xa.label || 'X') + ' value' : un.replace(/s$/, '')}, value" in the units of the result; each reading is compared with the stage ${isVar ? 'whose value is nearest' : 'nearest its date, or the long-term phase'}. Or upload a Reference Results file above.</p>
       <select id="serOut">${(CAT ? CAT.outputs : []).filter(o => !['fos', 'file'].includes(o.key)).map(o => `<option value="${o.key}"${o.key === sr.output ? ' selected' : ''}>${esc(o.label)}</option>`).join('')}</select>
-      <textarea id="serPts" rows="5" style="width:100%" placeholder="30, 0.0021&#10;60, 0.0038">${esc((sr.points || []).map(p => `${p.day}, ${p.value}`).join('\n'))}</textarea>` : '');
-  $$('#timeBox .tday').forEach(x => x.onchange = () => { t.days = t.days || {}; if (x.value === '') delete t.days[x.dataset.p]; else t.days[x.dataset.p] = +x.value; save(); });
-  const ser = () => { const pts = $('#serPts').value.split(/\n+/).map(l => l.split(/[,;\s]+/).filter(Boolean).map(Number)).filter(a => a.length >= 2 && a.every(isFinite)).map(([day, value]) => ({day, value}));
-    S.series = pts.length ? [{output: $('#serOut').value, points: pts}] : []; $('#ltWrap').classList.toggle('hidden', !(t.on || pts.length)); save(); };
+      ${(S.series || []).length > 1 ? `<p class="meta">Also from the Reference Results file: ${(S.series || []).slice(1).map(x => `${esc((OMAP[x.output] || {}).label || x.output)} (${x.points.length} readings)`).join(', ')}. The box below edits the first one.</p>` : ''}
+      <textarea id="serPts" rows="5" style="width:100%" placeholder="${isVar ? '100, 0.0021&#10;200, 0.0038' : '30, 0.0021&#10;60, 0.0038'}">${esc((sr.points || []).map(ptxt).join('\n'))}</textarea>` : '');
+  $$('#timeBox .tday').forEach(x => x.onchange = () => { t.days = t.days || {}; if (x.value === '') delete t.days[x.dataset.p]; else t.days[x.dataset.p] = +x.value / f; save(); });
+  $$('#timeBox .xval').forEach(x => x.onchange = () => { xa.values = xa.values || {}; if (x.value === '') delete xa.values[x.dataset.p]; else xa.values[x.dataset.p] = +x.value; save(); });
+  $('#xKind').onchange = () => { const [k, u] = $('#xKind').value.split(':'); S.xaxis = {...xa, kind: k, unit: u || xa.unit || 'day'}; renderTime(); save(); };
+  if (isVar) { $('#xLab').onchange = () => { xa.label = $('#xLab').value; renderTime(); save(); }; $('#xUnit').onchange = () => { xa.unit_label = $('#xUnit').value; save(); }; }
+  const nearestDay = x => { const e = Object.entries(xa.values || {}).filter(([k]) => k in sd); if (!e.length) return null; const [k] = e.reduce((a, b) => Math.abs(b[1] - x) < Math.abs(a[1] - x) ? b : a); return sd[k]; };
+  const ser = () => { const pts = $('#serPts').value.split(/\n+/).map(l => l.split(/[,;\s]+/).filter(Boolean).map(Number)).filter(a => a.length >= 2 && a.every(isFinite))
+      .map(([a, value]) => isVar ? {day: nearestDay(a), x: a, value} : {day: a / f, value}).filter(p => p.day != null);
+    const keep = (S.series || []).filter(x => x.output !== sr.output && x.output !== $('#serOut').value);  // other results' readings (Reference Results file)
+    S.series = keep.concat(pts.length ? [{output: $('#serOut').value, points: pts}] : []); $('#ltWrap').classList.toggle('hidden', !(t.on || pts.length)); save(); };
   if (cal) { $('#serPts').onchange = ser; $('#serOut').onchange = ser; }
 }
 $('#timeOn').onchange = () => { S.time = {...(S.time || {}), on: $('#timeOn').checked}; if (S.time.longterm == null) S.time.longterm = 365; renderTime(); save(); };

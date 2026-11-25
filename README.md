@@ -17,6 +17,72 @@
 - **Soil parameter list**: classification and numerical internals hidden (ClayFraction, cK, eMax, Kwn…); PLAXIS 3D spellings get their units (E50Ref, cRef, pRef: kN/m²; permeability m/day).
 - **Optimization pass / fail**: a run passes only when every criterion is met (a 99.99 % achievement shown as 100 % no longer counts).
 
+### Calibration / Back-analysis: Reference Results from an Excel file
+
+Next to typing the measured values, the *Measured values* section of a Calibration / Back-analysis study has
+**⬆ Upload Reference Results** (.xlsx recommended, .xls or .csv) and **⬇ Excel template** / **⬇ CSV template**. The file is checked row
+by row; only a file with no wrong row is loaded.
+
+**Format (one table per file).** The table is on the sheet named `Reference Results` (else the first sheet); its
+first non-empty row is the header. Column names are not case sensitive and can be in any order; other columns
+(Note, Source…) are ignored.
+
+| Column | | What to write |
+|---|---|---|
+| Result | required | The PLAXIS result: its key (`fos`, `utot`, `ux`, `uv`, `settle`, `wall_ux`, `plate_m`, `plate_q`, `plate_n`, `anchor`, `pile_n`, `pexcess`), its name in the app (`Max total displacement \|u\|`) or its PLAXIS name (`Utot_max`) |
+| Value | required | The measured or benchmark value, a number (a decimal comma `12,5` is accepted) |
+| Unit | required | The unit of Value, of the same kind as the result: `mm`, `cm`, `m`, `ft`, `in` (displacements) · `kN`, `MN`, `kip` (forces) · `kN·m/m` or `kNm/m` (moments) · `kN/m` · `kPa`, `kN/m²`, `kN/m2`, `MPa` (stresses). Empty or `-` only for the factor of safety |
+| Stage | optional | The construction stage of the reading: its PLAXIS name (`Phase_3`), its label (`Anchor + prestress`) or `Long term` |
+| Day | optional | The day of the reading, counted from the start of works |
+| Time | optional | The time or duration of the reading (e.g. a pile load test in minutes). Write the unit in the header, `Time (min)`, `Time (h)`, `Time (day)`, or in a `Time unit` column (`min`, `h`, `day`) row by row; without one it is in the unit of the X-axis (days by default) |
+| X | optional | The value of the X-axis variable at the reading (e.g. the applied load in kN). It goes on the stage whose X value is nearest and is drawn at its own X. Needs the X-axis set to *Other variable* with its value at each stage |
+
+Example:
+
+| Result | Value | Unit | Stage | Day |
+|---|---|---|---|---|
+| Wall horizontal deflection | 12.5 | mm | | |
+| Max anchor force | 410 | kN | | |
+| wall_ux | 4.1 | mm | | 30 |
+| wall_ux | 8.7 | mm | | 60 |
+| Surface settlement (top of model) | 9.8 | mm | Long term | |
+
+**How rows are used.** A row with no Stage, Day, Time or X is the *final value* of that result (one per result); it
+becomes a measured value of the study. Any other row is a *reading* of the field series, placed by the first of
+Day, Time, X, Stage that is filled in; it is compared with the stage of that date (as for readings typed by hand), and `Long term` turns on the long-term phase
+after the last stage (365 days unless *Results over time* says otherwise). Values are converted from their Unit into
+the units the study shows (Units setting), so a file in mm works with a model in m.
+
+**Bad input.** Nothing is loaded and the study keeps its previous values. The message lists every wrong row with its
+Excel row number and the reason: a missing column (Result, Value or Unit), an unknown result, a value that is not a
+number, an unknown unit or one of the wrong kind (e.g. `kN` for a displacement), an unknown stage, a negative day,
+a wrong time or unit of time, an X when the X-axis is not a variable, or the same result twice as a final value or
+twice on the same day. A file with no rows under the header, more than
+5000 rows, or that is not .xlsx / .xls / .csv is refused with its reason. Old .xls files need the `xlrd` package
+(installed by run.bat from requirements.txt), otherwise save as .xlsx.
+
+**CSV files.** The same columns and the same checks as the Excel table: the header on the first line, values
+separated by commas, or by semicolons when the decimal separator is a comma (`wall_ux;12,5;mm`), or tabs. Save from
+Excel as *CSV UTF-8* (Windows-1252, Excel's plain *CSV (Comma delimited)*, also works). Row numbers in the error
+messages are the line numbers of the file. Example:
+
+```
+Result,Value,Unit,Stage,Time (min)
+Max anchor force,410,kN,,
+uv,1.2,mm,,30
+uv,2.6,mm,,60
+```
+
+**X-axis of the figures.** Under *Results over time* (and always in a calibration) the figures of the results by
+stage can be drawn against: *Time (days)*, *Time (hours)*, *Time / duration (minutes)*, *Construction stage*, or
+*Other variable*: a name, a unit and its value at each stage, e.g. the applied load of each load step of a pile load
+test, so a load–settlement curve is calibrated against the test. Stage dates and the typed readings are shown in
+the chosen time unit (kept in days). Changing the X-axis redraws the figures of the runs already done.
+
+**Replacing and removing.** A new file replaces the measured values and readings of the study; *🗑 Remove file*
+clears them. After loading, the values stay editable in the list. PLAXIS runs are not changed by this option: it
+only fills the measured values that the calibration compares with.
+
 ## OPTIMUS® V26.1.7
 
 - **The surcharge area follows its corners**: changing a corner of a line or surface load, or a model point that sits on one of its corners (for example Point_12 or Point_13 next to the wall), changes the load's area (or length). The new area is shown for each value in the view (Area tab and a blue dashed outline in 3D), under the variable input and in the scheduled runs. In PLAXIS the load corner moves together with the point.

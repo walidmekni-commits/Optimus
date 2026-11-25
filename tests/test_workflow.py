@@ -1,4 +1,5 @@
 """End-to-end tests of the workflow paths, using demo AI + simulated solver (no API key, no PLAXIS)."""
+import io
 import os
 
 os.environ.update({"AI_MODE": "demo", "SOLVER_BACKEND": "simulated", "RETRY_DELAY_SECONDS": "0",
@@ -680,3 +681,174 @@ def test_dwg_many_sections(tmp_path):
     d.save(str(tmp_path / "sheets.dwg"))
     out = geometry.read_file(tmp_path / "sheets.dwg")
     assert len(out) == 6 and all(39 <= w <= 41 for w in _widths(out)), (_widths(out), out[0]["warnings"])
+
+
+# --- Calibration / Back-analysis: Reference Results uploaded as an Excel file (app/reference.py) -------------------
+def _ref_xlsx(rows, header=("Result", "Value", "Unit", "Stage", "Day")):
+    from openpyxl import Workbook
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Reference Results"
+    ws.append(list(header))
+    for r in rows:
+        ws.append(list(r))
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
+def _cal_project(client):
+    pid = new_project(client, "calibration")
+    assert client.post(f"/api/projects/{pid}/plaxis-model/read?demo=1").status_code == 200
+    r = client.put(f"/api/projects/{pid}/study", json={"mode": "calibration", "runs": 4,
+                                                        "params": [{"item": "mat:Clay.phi", "min": 22, "max": 34}]})
+    assert r.status_code == 200, r.text
+    return pid
+
+
+def _upload_ref(client, pid, data, name="reference.xlsx"):
+    return client.post(f"/api/projects/{pid}/study/reference", files=[("file", (name, data, "application/octet-stream"))])
+
+
+def test_reference_results_valid_file(client):
+    pid = _cal_project(client)
+    data = _ref_xlsx([("Wall horizontal deflection", 12.5, "mm", None, None),   # final value, by its name, in mm
+                      ("anchor", "410", "kN", None, None),                       # by its key, a number typed as text
+                      ("fos", 1.4, "-", None, None),                             # no unit for the factor of safety
+                      ("wall_ux", 4.1, "mm", None, 30),                          # readings by day
+                      ("wall_ux", 8.7, "mm", None, 60),
+                      ("Utot_max", 0.9, "cm", "Anchor + prestress", None),      # by its PLAXIS name, at a stage label
+                      ("settle", 9.8, "mm", "Long term", None)])
+    r = _upload_ref(client, pid, data)
+    assert r.status_code == 200, r.text
+    s, ref = r.json()["study"], r.json()["reference"]
+    assert ref["rows"] == 7 and ref["finals"] == 3 and ref["readings"] == 4
+    meas = {x["output"]: x["value"] for x in s["measured"]}
+    assert meas == {"wall_ux": pytest.approx(0.0125), "anchor": pytest.approx(410.0), "fos": pytest.approx(1.4)}
+    ser = {x["output"]: x["points"] for x in s["series"]}
+    assert [p["day"] for p in ser["wall_ux"]] == [30, 60] and ser["wall_ux"][1]["value"] == pytest.approx(0.0087)
+    assert ser["utot"] == [{"day": 90.0, "value": pytest.approx(0.009)}]  # Anchor + prestress is the 3rd stage, day 90
+    assert ser["settle"][0]["day"] == 120 + 365 and s["time"]["longterm"] == 365
+    assert r.json()["errors"] == []
+    # saved with the project, and used by the calibration run
+    assert client.get(f"/api/projects/{pid}/study").json()["study"]["reference"]["name"] == "reference.xlsx"
+    tid = client.post(f"/api/projects/{pid}/study/run").json()["id"]
+    out = client.get(f"/api/tasks/{tid}/study").json()
+    assert out["status"] == "succeeded"
+    got = {m["label"]: m["value"] for m in out["calibration"]["measured"]}
+    assert got["Max anchor force"] == pytest.approx(410.0)
+    # removing the file clears what it gave
+    s = client.delete(f"/api/projects/{pid}/study/reference").json()["study"]
+    assert s["measured"] == [] and s["series"] == [] and s["reference"] is None
+
+
+def test_reference_results_missing_column(client):
+    pid = _cal_project(client)
+    before = client.get(f"/api/projects/{pid}/study").json()["study"]
+    r = _upload_ref(client, pid, _ref_xlsx([("utot", 12, None)], header=("Result", "Measured value", "Stage")))
+    assert r.status_code == 400
+    msg = r.json()["detail"]
+    assert "Missing column: Unit" in msg and "Result, Measured value, Stage" in msg
+    r = _upload_ref(client, pid, _ref_xlsx([("utot", "mm")], header=("Result", "Unit")))
+    assert r.status_code == 400 and "Missing column: Value" in r.json()["detail"]
+    assert client.get(f"/api/projects/{pid}/study").json()["study"] == before  # nothing was loaded
+
+
+def test_reference_results_wrong_unit(client):
+    pid = _cal_project(client)
+    r = _upload_ref(client, pid, _ref_xlsx([("utot", 12, "kN", None, None),          # a force for a displacement
+                                            ("anchor", 400, "furlong", None, None),  # not a unit
+                                            ("ux", 5, None, None, None),             # no unit
+                                            ("ux", 5, "mm", None, None)]))           # this row is right
+    assert r.status_code == 400
+    msg = r.json()["detail"]
+    assert 'Row 2: Unit "kN" does not fit Max total displacement |u|, which needs a length' in msg
+    assert 'Row 3: Unit "furlong" is not a unit the app knows' in msg
+    assert "Row 4: Unit is empty" in msg and "Row 5" not in msg
+    assert client.get(f"/api/projects/{pid}/study").json()["study"]["measured"] == []
+
+
+def test_reference_results_other_mistakes_and_formats(client):
+    pid = _cal_project(client)
+    r = _upload_ref(client, pid, _ref_xlsx([("foo", 1, "mm", None, None), ("utot", "abc", "mm", None, None),
+                                            ("utot", 1, "mm", "Phase_99", None), ("utot", 1, "mm", None, -3),
+                                            ("uv", 1, "mm", None, None), ("uv", 2, "mm", None, None)]))
+    msg = r.json()["detail"]
+    assert r.status_code == 400 and all(f"Row {n}:" in msg for n in (2, 3, 4, 5, 7)) and "Row 6:" not in msg
+    assert _upload_ref(client, pid, _ref_xlsx([])).status_code == 400  # header only
+    assert "not an Excel file" in _upload_ref(client, pid, b"x", "ref.pdf").json()["detail"]
+    csv_data = "Result;Value;Unit;Day\nwall_ux;12,5;mm;\nwall_ux;4,1;mm;30\n".encode()
+    r = _upload_ref(client, pid, csv_data, "ref.csv")
+    assert r.status_code == 200, r.text
+    assert r.json()["study"]["measured"] == [{"output": "wall_ux", "value": pytest.approx(0.0125)}]
+    assert r.json()["study"]["series"][0]["points"] == [{"day": 30.0, "value": pytest.approx(0.0041)}]
+    t = client.get("/api/reference-results-template.xlsx")  # the template loads as it is
+    assert t.status_code == 200 and _upload_ref(client, pid, t.content).status_code == 200
+
+
+def test_reference_results_time_in_minutes_and_x_axis(client):
+    """Pile load test: readings in minutes, and the figures against time (minutes), stage or the applied load."""
+    from app import study
+    pid = _cal_project(client)
+    data = _ref_xlsx([("uv", 1.2, "mm", 30), ("uv", 2.6, "mm", 60), ("uv", 3.1, "mm", 120)],
+                     header=("Result", "Value", "Unit", "Time (min)"))
+    r = _upload_ref(client, pid, data)
+    assert r.status_code == 200, r.text
+    pts = r.json()["study"]["series"][0]["points"]
+    assert [p["day"] for p in pts] == pytest.approx([30 / 1440, 60 / 1440, 120 / 1440])
+    # a Time unit column per row, and a wrong unit of time
+    r = _upload_ref(client, pid, _ref_xlsx([("uv", 1.2, "mm", 2, "h"), ("uv", 1.3, "mm", 2, "weeks")],
+                                           header=("Result", "Value", "Unit", "Time", "Time unit")))
+    assert r.status_code == 400 and 'Row 3: Time unit "weeks" is not min, h or day' in r.json()["detail"]
+    assert "Row 2" not in r.json()["detail"]
+    # X without an X-axis variable is refused; with one, it goes on the stage of the nearest load
+    r = _upload_ref(client, pid, _ref_xlsx([("uv", 1.2, "mm", 500)], header=("Result", "Value", "Unit", "X")))
+    assert r.status_code == 400 and "X-axis of the study is not a variable" in r.json()["detail"]
+    xa = {"kind": "variable", "label": "Applied load", "unit_label": "kN",
+          "values": {"Phase_1": 250, "Phase_2": 500, "Phase_3": 750, "Phase_4": 1000}}
+    s = client.get(f"/api/projects/{pid}/study").json()["study"]
+    assert client.put(f"/api/projects/{pid}/study", json={**s, "xaxis": xa}).status_code == 200
+    r = _upload_ref(client, pid, _ref_xlsx([("uv", 1.2, "mm", 480), ("uv", 3.0, "mm", 1000)],
+                                           header=("Result", "Value", "Unit", "X")))
+    assert r.status_code == 200, r.text
+    pts = r.json()["study"]["series"][0]["points"]
+    assert pts == [{"day": 60.0, "x": 480.0, "value": pytest.approx(0.0012)}, {"day": 120.0, "x": 1000.0, "value": pytest.approx(0.003)}]
+    tid = client.post(f"/api/projects/{pid}/study/run").json()["id"]
+    out = client.get(f"/api/tasks/{tid}/study").json()
+    assert out["status"] == "succeeded" and out["figures"]
+    # the figure data on each X-axis
+    t = main._task_or_404(tid)
+    _, res, allruns, _ = main._study_results(tid)
+    ts = res["time"][0]
+    load = study.on_xaxis(ts, xa)
+    assert load["measured"] == [(480.0, pytest.approx(0.0012)), (1000.0, pytest.approx(0.003))]
+    assert [p[0] for p in load["runs"][0]["points"]] == [500, 1000]  # the stages of the readings (Results over time off)
+    mins = study.on_xaxis(ts, {"kind": "time", "unit": "min"})
+    assert [p[0] for p in mins["runs"][0]["points"]] == [60 * 1440, 120 * 1440] and mins["stages"][0][0] == 60 * 1440
+    st = study.on_xaxis(ts, {"kind": "stage"})
+    assert [p[0] for p in st["runs"][0]["points"]] == [1, 2] and st["xticks"][1][1] == "Excavation to -10 m"
+    specs = [x for x in study.chart_specs(t, res, allruns) if x["kind"] == "time"]
+    assert specs[0]["xlabel"] == "Applied load (kN)" and "against Applied load" in specs[0]["title"]
+    # an X-axis variable without values is reported before the run
+    prev = client.put(f"/api/projects/{pid}/study", json={**r.json()["study"], "xaxis": {"kind": "variable"}}).json()
+    assert any("X-axis" in e for e in prev["errors"])
+
+
+def test_reference_results_csv(client):
+    """CSV: commas, semicolons with a decimal comma, Windows-1252, the same checks as Excel, and its template."""
+    pid = _cal_project(client)
+    r = _upload_ref(client, pid, b"Result,Value,Unit,Stage,Time (min)\r\nMax anchor force,410,kN,,\r\nuv,1.2,mm,,30\r\n", "ref.csv")
+    assert r.status_code == 200, r.text
+    s = r.json()["study"]
+    assert s["measured"] == [{"output": "anchor", "value": pytest.approx(410.0)}]
+    assert s["series"][0]["points"] == [{"day": pytest.approx(30 / 1440), "value": pytest.approx(0.0012)}]
+    r = _upload_ref(client, pid, "Result;Value;Unit\nMax excess pore pressure;12,5;kN/m²\n".encode("cp1252"), "ref.csv")
+    assert r.status_code == 200, r.text
+    assert r.json()["study"]["measured"] == [{"output": "pexcess", "value": pytest.approx(12.5)}]
+    r = _upload_ref(client, pid, b"Result,Reading\nutot,3\n", "ref.csv")  # missing column
+    assert r.status_code == 400 and "Missing columns: Value, Unit" in r.json()["detail"]
+    r = _upload_ref(client, pid, b"Result,Value,Unit\nutot,3,kN\n", "ref.csv")  # wrong unit, line 2
+    assert r.status_code == 400 and 'Row 2: Unit "kN" does not fit' in r.json()["detail"]
+    t = client.get("/api/reference-results-template.csv")
+    assert t.status_code == 200 and t.content.startswith(b"\xef\xbb\xbfResult,Value,Unit")
+    assert _upload_ref(client, pid, t.content, "template.csv").status_code == 200

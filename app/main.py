@@ -1394,6 +1394,53 @@ def put_study(pid: str, body: dict):
     return {"study": s, **(_study_preview(m, s) if m else {})}
 
 
+# --- Calibration / Back-analysis: Reference Results uploaded as an Excel file (app/reference.py) -------------------
+@app.post("/api/projects/{pid}/study/reference")
+def upload_reference(pid: str, file: UploadFile = File(...)):
+    """Reads the Reference Results table, checks every row and, only when all rows are right, puts the values into
+    the study's measured values (final values) and field readings (by stage / day). Replaces the previous ones."""
+    from . import reference
+    p = _project_or_404(pid)
+    m = _study_model(p)
+    s = study.clean(p["setup"].get("study"), "calibration")
+    try:
+        got = reference.parse(file.file.read(), file.filename or "", m, p["setup"], s)
+    except reference.ReferenceError as e:
+        raise HTTPException(400, str(e))
+    s = {**s, "measured": got["measured"], "series": got["series"],
+         "reference": {"name": file.filename, "rows": got["rows"], "finals": len(got["measured"]),
+                       "readings": sum(len(x["points"]) for x in got["series"]), "warnings": got["warnings"],
+                       "at": time.strftime("%Y-%m-%d %H:%M")}}
+    if got["longterm"] is not None:  # a "Long term" reading needs the long-term phase after the last stage
+        s["time"] = {**(s.get("time") or {}), "longterm": got["longterm"]}
+    db.update_project(pid, setup={**p["setup"], "study": s})
+    return {"study": s, "reference": s["reference"], **_study_preview(m, s)}
+
+
+@app.delete("/api/projects/{pid}/study/reference")
+def remove_reference(pid: str):
+    """Removes the uploaded Reference Results file and the measured values and readings it gave."""
+    p = _project_or_404(pid)
+    s = {**study.clean(p["setup"].get("study")), "measured": [], "series": [], "reference": None}
+    db.update_project(pid, setup={**p["setup"], "study": s})
+    m = (p["setup"] or {}).get("plaxis_model")
+    return {"study": s, **(_study_preview(m, s) if m else {})}
+
+
+@app.get("/api/reference-results-template.csv")
+def reference_template_csv():
+    from . import reference
+    return Response(reference.template_csv(), media_type="text/csv",
+                    headers={"Content-Disposition": 'attachment; filename="Reference Results template.csv"'})
+
+
+@app.get("/api/reference-results-template.xlsx")
+def reference_template():
+    from . import reference
+    return Response(reference.template(), media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    headers={"Content-Disposition": 'attachment; filename="Reference Results template.xlsx"'})
+
+
 @app.post("/api/projects/{pid}/study/run")
 def run_study(pid: str):
     """Builds the runs of the study and starts them straight away."""
@@ -1576,6 +1623,9 @@ def _study_results(tid: str, swap: int | None = None):
     runs = db.get_runs(tid)
     prev = _chain_runs(t)
     setup = (db.get_project(t["project_id"]) or {}).get("setup") or {}
+    xa = (setup.get("study") or {}).get("xaxis")
+    if xa and (setup.get("study") or {}).get("mode") == (t["plan"].get("study") or {}).get("mode"):
+        t["plan"]["study"] = {**(t["plan"].get("study") or {}), "xaxis": xa}  # the X-axis chosen now redraws the figures
     if units.display_of(setup) != units.plaxis_of(setup):  # results shown in the chosen units
         tg = {x["name"]: x for x in t["plan"]["targets"]}
         for r in runs + prev:
