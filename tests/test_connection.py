@@ -321,3 +321,115 @@ def test_an_empty_read_never_replaces_the_model(client):
     with pytest.raises(main.HTTPException):
         main._save_model(pid, empty)
     assert client.get(f"/api/projects/{pid}/plaxis-model").json()["model"]["points"]
+
+
+def test_expert_menu_drawn_by_plaxis_itself(monkeypatch):
+    """PLAXIS 3D 2024 (Walid 25 Nov 2026): no Win32 menu bar; Expert opens but the drop-down's items may not be
+    readable. OPTIMUS presses the item by UI Automation, or else Down x7 + Enter, each checked by the dialog."""
+    from app import plaxis_gui as G
+
+    class M:
+        handle = 7
+
+        def menu(self):
+            return None
+
+        def set_focus(self):
+            pass
+
+    class El:
+        def __init__(self, name, on=None):
+            self.name, self.on = name, on
+
+        def window_text(self):
+            return self.name
+
+        def invoke(self):
+            if self.on:
+                self.on()
+
+        def click_input(self):
+            self.invoke()
+
+    dialog = {"open": False}
+    monkeypatch.setattr(G.time, "sleep", lambda s: None)
+    monkeypatch.setattr(G, "_dialog", lambda pid: "DLG" if dialog["open"] else None)
+    keys = []
+    monkeypatch.setattr(G, "_keys", lambda k: (keys.append(k), dialog.update(open="{ENTER}" in k)))
+    readable = {"on": True}
+
+    def named(pid, handle, pattern):
+        items = [El("Expert")] + ([El("Configure remote scripting server...", lambda: dialog.update(open=True))]
+                                  if readable["on"] else [El("")])
+        found = [e for e in items if e.name and __import__("re").search(pattern, e.name)]
+        return found, [e.name for e in items if e.name]
+    monkeypatch.setattr(G, "_uia_named", named)
+    G.LOG.clear()
+    assert G.open_dialog(1, M()) == "DLG" and keys == []
+    assert any("uia: pressing 'Configure remote scripting server...'" in x for x in G.LOG)
+
+    dialog["open"], readable["on"] = False, False
+    G.LOG.clear()
+    assert G.open_dialog(1, M()) == "DLG"
+    assert keys == ["{ESC}", "{DOWN}" * 7 + "{ENTER}"]
+    assert any("item not readable" in x for x in G.LOG)
+
+    dialog["open"] = False
+    monkeypatch.setattr(G, "_keys", lambda k: keys.append(k))  # nothing works: a clear error with each way
+    with pytest.raises(RuntimeError) as e:
+        G.open_dialog(1, M())
+    assert "no Win32 menu bar" in str(e.value) and "keys: no dialog" in str(e.value)
+
+
+def test_server_already_on_with_unreadable_password(monkeypatch):
+    """Ashraf C1 re-test: the PLAXIS opened by hand already runs its server, password unknown. The dialog is found by
+    its controls (title may differ); the server is stopped, a new strong password typed, then started again."""
+    from app import plaxis_gui as G
+
+    class W:
+        def __init__(self, text, cls, kids=(), on_click=None):
+            self.text, self.cls, self.kids, self.on_click, self.handle = text, cls, list(kids), on_click, 1
+
+        def window_text(self):
+            return self.text
+
+        def class_name(self):
+            return self.cls
+
+        def descendants(self):
+            return self.kids
+
+        def is_visible(self):
+            return True
+
+        def click(self):
+            if self.on_click:
+                self.on_click()
+
+        def set_edit_text(self, t):
+            self.text = t
+
+        def set_focus(self):
+            pass
+
+        def rectangle(self):
+            class R:
+                left = top = 0
+                right = bottom = 100
+            return R()
+
+    state = W("The server is running", "TLabel")
+    pw = W("****************", "TEdit")
+    clicks = []
+    dlg = W("Server", "TFrmServer", [
+        state, W("10203", "TSpinEdit"), pw, W("Show password", "TCheckBox"),
+        W("Stop server", "TButton", on_click=lambda: (clicks.append("stop"), setattr(state, "text", "The server is not running"))),
+        W("Start server", "TButton", on_click=lambda: (clicks.append("start"), setattr(state, "text", "The server is running"))),
+        W("Close", "TButton")])
+    main = W("PLAXIS 3D Advanced: UA-22_converted_2.p3d", "TMainForm")
+    monkeypatch.setattr(G, "windows_of", lambda pid: [main, dlg])
+    monkeypatch.setattr(G.time, "sleep", lambda s: None)
+    assert G._dialog(32560) is dlg
+    r = G.start_server(32560)
+    assert r["port"] == 10203 and len(r["password"]) == 16 and pw.text == r["password"]
+    assert clicks == ["stop", "start"] and state.text == "The server is running"

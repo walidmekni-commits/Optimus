@@ -382,7 +382,7 @@ def gui_start_server(pid: int, progress=lambda m: None, want_port: int = 0) -> d
     progress("Switching on PLAXIS' scripting server for you (Expert › Configure remote scripting server)…")
     r = gui("start", pid, want_port)
     _step(("server switched on in PLAXIS: " if r.get("ok") else "menu switch not possible: ")
-          + (", ".join(r.get("log") or []) if r.get("ok") else str(r.get("error"))))
+          + ("" if r.get("ok") else str(r.get("error")) + " | ") + ", ".join(r.get("log") or []))
     return r
 
 

@@ -8,7 +8,8 @@
 Runs as its own small process (python -m app.plaxis_gui --pid N --action start) so the window automation
 (pywinauto) never disturbs the app, and prints one JSON line:
     {"ok": true, "port": 10000, "password": "...", "log": [...]}    or    {"ok": false, "error": "...", "log": [...]}
-Actions: start (switch the server on), dismiss (only close the disclaimer), windows (list PLAXIS windows).
+Actions: start (switch the server on), dismiss (only close the disclaimer), windows (list PLAXIS windows),
+menu (what the automation sees of the Expert menu, for QA).
 """
 import argparse
 import json
@@ -141,56 +142,192 @@ def main_window(pid: int):
 
 
 def _dialog(pid: int):
-    for w in windows_of(pid):
-        if re.search(r"(?i)remote scripting", _text(w)):
+    """The Configure remote scripting server dialog: by its title, or (its title may differ, e.g. while the server is
+    already running) by its own controls: a Start/Stop server button with a Show password box."""
+    wins = windows_of(pid)
+    for w in wins:
+        if re.search(r"(?i)remote scripting|scripting server", _text(w)):
+            return w
+    for w in wins:
+        if _is_disclaimer(w) or re.search(r"(?i)\bplaxis\b", _text(w)):
+            continue
+        try:
+            texts = [_text(k) for k in w.descendants()]
+        except Exception:  # noqa: BLE001
+            continue
+        if any(re.search(r"(?i)^(start|stop) server$", t) for t in texts) and \
+                any(re.search(r"(?i)show password|password", t) for t in texts):
             return w
     return None
 
 
+EXPERT = r"(?i)^expert$"
+ITEM = r"(?i)remote\s*scripting"
+# PLAXIS 3D 2024 Expert menu, above the item: Examine commands, Run commands, Macro library, Run Python script,
+# Run Python tool, Python (used only when the menu's items cannot be read at all)
+ITEMS_ABOVE = 6
+
+
+def _wait_dialog(pid: int, secs: float):
+    for _ in range(max(1, int(secs / 0.25))):
+        d = _dialog(pid)
+        if d:
+            return d
+        time.sleep(0.25)
+    return None
+
+
+def _via_win32(main, errors: list) -> bool:
+    """A real Win32 menu bar: the item's command is sent to PLAXIS, no mouse needed."""
+    menu = main.menu()
+    if menu is None or not menu.item_count():
+        errors.append("no Win32 menu bar (PLAXIS draws its own)")
+        return False
+    tops = menu.items()
+    log("win32 menu bar: " + ", ".join(_text(t) or "?" for t in tops))
+    exp = next((t for t in tops if re.search(EXPERT, _text(t))), None)
+    if exp is None:
+        errors.append("win32: no Expert in the menu bar")
+        return False
+    subs = exp.sub_menu().items()
+    log("win32 Expert: " + ", ".join(_text(s) or "?" for s in subs))
+    item = next((s for s in subs if re.search(ITEM, _text(s))), None)
+    if item is None:
+        errors.append("win32: no remote scripting item under Expert")
+        return False
+    log("win32: selecting " + _text(item))
+    item.select()
+    return True
+
+
+def _uia_named(pid: int, main_handle, pattern: str):
+    """Every UI Automation element of PLAXIS (its windows and drop-downs) whose name matches; and all names seen."""
+    from pywinauto import Desktop
+    found, names = [], []
+    tops = []
+    try:
+        tops = [w for w in Desktop(backend="uia").windows() if w.process_id() == pid]
+    except Exception as e:  # noqa: BLE001
+        log(f"uia windows: {type(e).__name__}: {e}")
+    # the opened drop-down is its own top-level window: searched first and whole; the big main window (with the
+    # model tree) last and only for its menu items, so the search stays quick
+    tops.sort(key=lambda w: w.handle == main_handle)
+    for w in tops:
+        if found and w.handle == main_handle:
+            break
+        try:
+            els = w.descendants(control_type="MenuItem") if w.handle == main_handle else [w] + w.descendants()
+        except Exception:  # noqa: BLE001
+            continue
+        for el in els:
+            n = _text(el)
+            if n:
+                names.append(n)
+            if n and re.search(pattern, n):
+                found.append(el)
+    return found, names
+
+
+def _keys(keys: str) -> None:
+    from pywinauto.keyboard import send_keys
+    send_keys(keys, pause=0.08)
+
+
+def _press(el) -> None:
+    try:
+        el.invoke()  # UI Automation Invoke: no mouse
+        return
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        el.select()
+        return
+    except Exception:  # noqa: BLE001
+        pass
+    el.click_input()
+
+
+def _open_expert(pid: int, main) -> bool:
+    found, _ = _uia_named(pid, main.handle, EXPERT)
+    if not found:
+        return False
+    try:
+        found[0].click_input()  # a real click: menus drawn by PLAXIS itself open only this way
+    except Exception:  # noqa: BLE001
+        _press(found[0])
+    time.sleep(0.8)
+    return True
+
+
 def open_dialog(pid: int, main) -> object:
-    """Expert › Configure remote scripting server… (Win32 menu first, then UI Automation)."""
+    """Expert › Configure remote scripting server… Three ways, each checked by the dialog appearing:
+    1. the Win32 menu (command sent, no mouse);  2. UI Automation: click Expert, then the item in the drop-down;
+    3. keyboard: click Expert, Down to the item, Enter (when the drop-down's items cannot be read)."""
     if _dialog(pid):
         return _dialog(pid)
     errors = []
     try:
-        menu = main.menu()
-        if menu is not None and menu.item_count():
-            for it in menu.items():
-                if _text(it).lower() == "expert":
-                    for sub in it.sub_menu().items():
-                        if re.search(r"(?i)remote scripting", _text(sub)):
-                            log(f"menu: {it.text()} > {sub.text()}")
-                            main.menu_select(f"{it.text()}->{sub.text()}")
-                            break
-                    break
-        else:
-            errors.append("no Win32 menu")
+        if _via_win32(main, errors):
+            d = _wait_dialog(pid, 8)
+            if d:
+                return d
+            errors.append("win32: item selected but no dialog")
     except Exception as e:  # noqa: BLE001
         errors.append(f"win32 menu: {type(e).__name__}: {e}")
-    for _ in range(20):
-        d = _dialog(pid)
-        if d:
-            return d
-        time.sleep(0.25)
-    try:  # UI Automation: click Expert, then the item in the drop-down
-        from pywinauto import Application, Desktop
-        app = Application(backend="uia").connect(process=pid, timeout=10)
-        win = app.window(handle=main.handle)
-        win.set_focus()
-        win.child_window(title="Expert", control_type="MenuItem").click_input()
-        time.sleep(0.8)
-        item = Desktop(backend="uia").window(process=pid, control_type="Menu").child_window(
-            title_re="(?i).*remote scripting.*", control_type="MenuItem")
-        log("menu (uia): Expert > Configure remote scripting server")
-        item.click_input()
-    except Exception as e:  # noqa: BLE001
-        errors.append(f"uia menu: {type(e).__name__}: {e}")
-    for _ in range(20):
-        d = _dialog(pid)
-        if d:
-            return d
-        time.sleep(0.25)
+    for way in ("uia", "keys"):
+        try:
+            try:
+                main.set_focus()
+            except Exception:  # noqa: BLE001
+                pass
+            if not _open_expert(pid, main):
+                errors.append(f"{way}: Expert not found in the PLAXIS window")
+                continue
+            found, names = _uia_named(pid, main.handle, ITEM)
+            if way == "uia":
+                if found:
+                    log(f"uia: pressing '{_text(found[0])}'")
+                    _press(found[0])
+                else:
+                    tail = [n for n in names if not re.search(EXPERT, n)][:25]
+                    log("uia: item not readable; names seen: " + ", ".join(tail))
+                    _keys("{ESC}")
+                    errors.append("uia: item not readable in the drop-down")
+                    continue
+            else:
+                log(f"keys: Down x{ITEMS_ABOVE + 1}, Enter")
+                _keys("{DOWN}" * (ITEMS_ABOVE + 1) + "{ENTER}")
+            d = _wait_dialog(pid, 5)
+            if d:
+                return d
+            _keys("{ESC}{ESC}")
+            errors.append(f"{way}: no dialog after pressing the item")
+        except Exception as e:  # noqa: BLE001
+            errors.append(f"{way}: {type(e).__name__}: {e}")
     raise RuntimeError("could not open Expert > Configure remote scripting server (" + "; ".join(errors) + ")")
+
+
+def menu_report(pid: int) -> dict:
+    """What the automation sees of the Expert menu (for QA): Win32 menu, the names after clicking Expert."""
+    main = main_window(pid)
+    if main is None:
+        return {"main": None}
+    out = {"main": _text(main), "class": _cls(main)}
+    try:
+        m = main.menu()
+        out["win32_menu"] = [_text(t) for t in m.items()] if m is not None and m.item_count() else []
+    except Exception as e:  # noqa: BLE001
+        out["win32_menu"] = f"{type(e).__name__}: {e}"
+    try:
+        main.set_focus()
+        out["expert_clicked"] = _open_expert(pid, main)
+        _, names = _uia_named(pid, main.handle, ITEM)
+        out["names_after_expert"] = names[:80]
+        _keys("{ESC}{ESC}")
+    except Exception as e:  # noqa: BLE001
+        out["uia"] = f"{type(e).__name__}: {e}"
+    out["windows"] = [{"title": _text(w), "class": _cls(w)} for w in windows_of(pid)]
+    return out
 
 
 def _edits(dlg):
@@ -246,6 +383,13 @@ def start_server(pid: int, want_port: int | None = None) -> dict:
         port = want_port
     password = texts[pw_i]
     if not password or "•" in password or "*" * len(password) == password:
+        stop = _button(dlg, r"(?i)^stop server$")
+        if _button(dlg, r"(?i)server is running") is not None and stop is not None:
+            # the server is on with a password that cannot be read: stop it, so a new one can be set and started
+            stop.click()
+            log("server on with an unreadable password: pressed Stop server")
+            time.sleep(1.0)
+            edits = _edits(dlg)
         password = strong_password()
         edits[pw_i].set_edit_text(password)
         log("no readable password: typed a new strong one")
@@ -288,7 +432,7 @@ def start_server(pid: int, want_port: int | None = None) -> dict:
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--pid", type=int, default=0)
-    ap.add_argument("--action", default="start", choices=("start", "dismiss", "windows"))
+    ap.add_argument("--action", default="start", choices=("start", "dismiss", "windows", "menu"))
     ap.add_argument("--port", type=int, default=0)
     a = ap.parse_args(argv)
     try:
@@ -300,6 +444,8 @@ def main(argv=None) -> int:
     try:
         if a.action == "windows":
             out = {"ok": True, "windows": plaxis_windows()}
+        elif a.action == "menu":
+            out = {"ok": True, "menu": menu_report(a.pid)}
         elif a.action == "dismiss":
             crash = crash_report(a.pid)
             out = {"ok": True, "crashed": bool(crash), "crash": crash or "",
