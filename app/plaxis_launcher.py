@@ -327,7 +327,7 @@ def _try(host, port, passwords, version):
 
 
 def _connected(s_i, g_i, host, port, pw, step):
-    settings.save({"solver": "plaxis", "host": host, "port": port, "password": pw})
+    settings.save({"solver": "plaxis", "host": host, "port": port, "password": pw, "connected_how": step})
     LAST["error"] = ""
     _step(step)
     return s_i, g_i
@@ -416,17 +416,15 @@ def connect(version: str = "3d", progress=lambda msg: None, should_stop=lambda: 
         r = _try(host, port, passwords(pw), version)
         if r:
             return _connected(r[0], r[1], host, port, r[2], f"connected on saved port {port}")
-        if not local or manual:
+        if not local:
             raise ConnectError(f"PLAXIS on {host}:{port} did not accept the password ({LAST['error']}). Copy the "
                                "password from PLAXIS (Expert › Configure remote scripting server, tick Show password) "
                                "into the PLAXIS password box and press Connect.")
-        progress(f"Something answers on port {port} but does not accept the saved password…")
+        progress(f"Something answers on port {port} but does not accept the saved password; connecting by itself…")
     elif not local:
         raise ConnectError(f"Nothing answers on {host}:{port}. Start the remote scripting server in PLAXIS there.")
-    elif manual:
-        LAST["error"] = f"nothing answers on port {port}"
-        raise ConnectError(f"Nothing answers on port {port}. In PLAXIS Input open Expert › Configure remote scripting "
-                           f"server, check the port is {port} and press Start server, then press Connect here.")
+    elif manual:  # V26.1.9: a pasted password that no longer answers is not asked again: OPTIMUS connects by itself
+        progress(f"Nothing answers on port {port}; OPTIMUS finds or starts PLAXIS itself…")
     stop_check()
 
     # 2. a PLAXIS Input that is already open
@@ -472,43 +470,57 @@ def connect(version: str = "3d", progress=lambda msg: None, should_stop=lambda: 
         port = _free_port(port + 1)
     new_pw = pw or _strong_password()
     tried = []
-    plain = _gui_available()  # start PLAXIS as a double-click does (start-up options can crash PLAXIS 2025)
+    gui_ok = _gui_available()
+    plain_exes = set(cfg.get("plain_exes") or [])
     for exe in exes:
-        stop_check()
-        progress(f"Starting {_exe_label(exe)}…" if plain else
-                 f"Starting {_exe_label(exe)} with its scripting server on port {port}…")
-        try:
-            args = [exe] if plain else [exe, f"--AppServerPort={port}", f"--AppServerPassword={new_pw}"]
-            proc = subprocess.Popen(args, cwd=os.path.dirname(exe))
-        except OSError as e:
-            tried.append(f"{_exe_label(exe)}: {e}")
-            continue
-        pid = getattr(proc, "pid", 0) or 0
-        settings.save({"host": "localhost", "port": port, "password": new_pw, "launched_pid": pid})
-        _step(f"started {exe} (process {pid}) on port {port}")
-        try:
-            r = _wait(port, new_pw, version, progress, stop_check, pid, START_TIMEOUT,
-                      f"{_exe_label(exe)}", proc=proc)
-        except _Quit as q:
-            # a small starter program may hand over to the real PLAXIS: look for it before trying the next one
-            later = [p for p in running_inputs() if p["pid"] != pid]
-            if later:
-                settings.save({"launched_pid": later[0]["pid"]})
-                r = _start_in_window(later[0]["pid"], version, progress, stop_check) or \
-                    _wait(port, new_pw, version, progress, stop_check, later[0]["pid"], START_TIMEOUT, "PLAXIS Input")
-                if r:
-                    settings.save({"input_exe": exe})
-                    return r
-            tried.append(f"{_exe_label(exe)} {q.code if isinstance(q.code, str) else f'closed by itself (exit code {q.code})'}")
-            _step(tried[-1])
+        # V26.1.9: first as the PLAXIS Reference Manual F.2.2 says, with the server on from the start
+        # (--AppServerPort / --AppServerPassword, chosen by OPTIMUS); a PLAXIS that closes with these options (seen with
+        # PLAXIS 2025) is started as a double-click does and its server is switched on through its menu; what worked
+        # is remembered for this program
+        ways = ["plain"] if exe in plain_exes and gui_ok else (["options", "plain"] if gui_ok else ["options"])
+        quit_why = None
+        for way in ways:
+            stop_check()
+            plain = way == "plain"
+            progress(f"Starting {_exe_label(exe)}…" if plain else
+                     f"Starting {_exe_label(exe)} with its scripting server on port {port}…")
+            try:
+                args = [exe] if plain else [exe, f"--AppServerPort={port}", f"--AppServerPassword={new_pw}"]
+                proc = subprocess.Popen(args, cwd=os.path.dirname(exe))
+            except OSError as e:
+                quit_why = f"{_exe_label(exe)}: {e}"
+                break
+            pid = getattr(proc, "pid", 0) or 0
+            settings.save({"host": "localhost", "port": port, "password": new_pw, "launched_pid": pid})
+            _step(f"started {exe} (process {pid}) on port {port}" + (" (as a double-click)" if plain else " (F.2.2 options)"))
+            try:
+                r = _wait(port, new_pw, version, progress, stop_check, pid, START_TIMEOUT,
+                          f"{_exe_label(exe)}", proc=proc)
+            except _Quit as q:
+                # a small starter program may hand over to the real PLAXIS: look for it before trying another way
+                later = [p for p in running_inputs() if p["pid"] != pid]
+                if later:
+                    settings.save({"launched_pid": later[0]["pid"]})
+                    r = _start_in_window(later[0]["pid"], version, progress, stop_check) or \
+                        _wait(port, new_pw, version, progress, stop_check, later[0]["pid"], START_TIMEOUT, "PLAXIS Input")
+                    if r:
+                        settings.save({"input_exe": exe, "connected_how": f"started {_exe_label(exe)} ({way})"})
+                        return r
+                quit_why = f"{_exe_label(exe)} {q.code if isinstance(q.code, str) else f'closed by itself (exit code {q.code})'}"
+                _step(quit_why + f" when started {'as a double-click' if plain else 'with the F.2.2 options'}")
+                if not plain and "plain" in ways:
+                    settings.save({"plain_exes": sorted(plain_exes | {exe})})
+                    progress(f"{quit_why} with the server options; starting it as a double-click…")
+                continue
+            if r:
+                settings.save({"input_exe": exe, "connected_how": f"started {_exe_label(exe)} ({way})"})
+                return r
+            raise _timeout_error(exe, port, pid)
+        if quit_why:
+            tried.append(quit_why)
             _mark_bad(exe)
             if exe != exes[-1]:
-                progress(f"{tried[-1]}. Trying the next PLAXIS on this PC…")
-            continue
-        if r:
-            settings.save({"input_exe": exe})
-            return r
-        raise _timeout_error(exe, port, pid)
+                progress(f"{quit_why}. Trying the next PLAXIS on this PC…")
     LAST["error"] = "; ".join(tried)
     raise ConnectError("PLAXIS did not start: " + "; ".join(tried) + ". Is a PLAXIS licence available? Open PLAXIS "
                        "once by hand (it may ask to accept the disclaimer or sign in), then press Try again: the app "

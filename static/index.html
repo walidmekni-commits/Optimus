@@ -662,7 +662,7 @@
   <section class="card" id="basicCard">
     <h2><span class="n">2</span>Run PLAXIS on the uploaded model<span class="hint">required before the study: connect to PLAXIS with its password, the uploaded model is calculated completely in PLAXIS (no visualization)</span></h2>
     <div class="body">
-      <div class="actions"><button id="bConn" title="1 · Paste the PLAXIS password, 2 · Automatic connection"><span class="dot" id="bDot"></span>🔑 PLAXIS connection: <b id="bConnTxt">…</b></button>
+      <div class="actions"><button id="bConn" title="1 · Automatic connection (OPTIMUS finds or starts PLAXIS), 2 · Paste the PLAXIS password"><span class="dot" id="bDot"></span>🔑 PLAXIS connection: <b id="bConnTxt">…</b></button>
         <button class="primary" id="bRun">▶ Run PLAXIS</button><span class="meta" id="bMeta"></span></div>
       <div id="bRes" class="basicRes"></div>
     </div>
@@ -915,14 +915,15 @@
   <div class="card">
     <h2>PLAXIS connection<span class="sp"></span><button id="connClose" class="small ghost">✕</button></h2>
     <div class="body">
-      <label class="opt"><input type="radio" name="cmode" value="manual"><span><b>1 · Paste the PLAXIS password</b><br><span class="meta">In PLAXIS Input: Expert › Configure remote scripting server › Start server. Copy the password shown there and paste it here (same port).</span></span></label>
-      <label class="opt"><input type="radio" name="cmode" value="auto"><span><b>2 · Automatic connection</b><br><span class="meta">The app finds PLAXIS (or starts it), starts its scripting server and reads the project.</span></span></label>
+      <label class="opt"><input type="radio" name="cmode" value="auto"><span><b>1 · Automatic connection (recommended)</b><br><span class="meta">OPTIMUS finds an open PLAXIS Input or starts it with its scripting server on (PLAXIS Reference Manual F.2.2), chooses the port and the password itself and remembers what worked: nothing to open or copy in PLAXIS.</span></span></label>
+      <label class="opt"><input type="radio" name="cmode" value="manual"><span><b>2 · Paste the PLAXIS password</b><br><span class="meta">Only if the automatic connection cannot be used (e.g. PLAXIS on another PC). In PLAXIS Input: Expert › Configure remote scripting server › Start server, copy the password shown there and paste it here (same port). If it stops answering, OPTIMUS connects by itself.</span></span></label>
       <div id="manualRow" class="grid2 hidden" style="margin-bottom:.6rem">
         <label class="f">Port<input id="mPort" type="number" value="10000"></label>
         <label class="f">Password<input id="mPw" type="password" autocomplete="off" placeholder="the password shown in PLAXIS"></label>
         <label class="meta" style="display:flex;gap:.4rem;align-items:center"><input type="checkbox" id="mShow"> show password</label>
         <span class="meta" id="mSaved"></span>
       </div>
+      <div class="meta" id="mHow" style="margin:.2rem 0 .4rem"></div>
       <div class="actions"><button class="primary" id="mConnect">Connect and read the model</button></div>
       <details>
         <summary>More settings</summary>
@@ -1099,7 +1100,7 @@ async function runBasic() {
   } catch (e) {
     btn.disabled = false;
     $('#bMeta').innerHTML = `<span class="err">${esc(e.message)}</span>`;
-    if (/not connected/i.test(e.message)) { basicAfterConnect = true; await openConn('manual'); $('#mConnect').textContent = 'Connect and run the uploaded model'; }  // the password first, then the run goes on
+    if (/not connected/i.test(e.message)) { basicAfterConnect = true; await openConn('auto'); $('#mConnect').textContent = 'Connect and run the uploaded model'; }  // the password first, then the run goes on
   }
 }
 const basicDone = () => BASIC && BASIC.status === 'succeeded';
@@ -2772,15 +2773,15 @@ async function readModel(opts = {}) {
   $('#btnRead').disabled = false;
 }
 function readError(t) { connPrompt(t); }
-/* PLAXIS not reachable (on opening, or after Read from PLAXIS): the password first, then automatic; no red error box */
+/* PLAXIS not reachable (on opening, or after Read from PLAXIS): automatic first (V26.1.9), the password as a fallback; no red error box */
 function connPrompt(t) {
   t = t || '';
   const pw = /decrypt|password/i.test(t), dat = /data folder|No PLAXIS project file/.test(t), started = /started|did not answer|Stopped|already open/i.test(t);
-  const head = pw ? 'The PLAXIS password does not match: copy the password shown in PLAXIS and paste it here.'
+  const head = pw ? 'The PLAXIS password does not match: press Automatic connection and OPTIMUS reads it from PLAXIS itself.'
                   : 'Connect to PLAXIS to read the model.';
   geoMsg(`<b>${head}</b><div class="actions" style="margin-top:.4rem">
-    <button class="primary small" id="gPw">1 · Paste the PLAXIS password</button>
-    <button class="small" id="gAuto">2 · Automatic connection</button>
+    <button class="primary small" id="gAuto">1 · Automatic connection</button>
+    <button class="small" id="gPw">2 · Paste the PLAXIS password</button>
     ${dat ? '<button class="small" id="gDir">Upload the data folder</button>' : ''}
     ${started ? '<button class="small" id="gRestart">Restart PLAXIS and connect</button>' : ''}
     <button class="small" id="gImp">Import geometry</button>
@@ -2823,13 +2824,14 @@ async function connStatus() {
   try { const s = await api('/api/settings'); const real = s.solver === 'plaxis';
         $('#connDot').className = 'dot ' + (real ? 'on' : 'sim'); $('#connTxt').textContent = real ? 'PLAXIS' : 'Connect PLAXIS';
         $('#bDot').className = 'dot ' + (real ? 'on' : 'sim'); $('#bConnTxt').textContent = real ? (s.password_set ? 'PLAXIS, password saved' : 'PLAXIS') : 'not connected yet';
-        $('#btnConn').title = real ? 'Calculations run in PLAXIS' : 'Click to connect to PLAXIS (password).'; return s; } catch (e) { return {}; }
+        $('#btnConn').title = real ? 'Calculations run in PLAXIS' : 'Click to connect to PLAXIS (OPTIMUS finds or starts it).'; return s; } catch (e) { return {}; }
 }
 async function openConn(mode) {
   $('#mConnect').textContent = 'Connect and read the model';
   const s = await connStatus();
-  const m = mode || (s.connect_mode === 'auto' ? 'auto' : 'manual');  // the password first
+  const m = mode || (s.connect_mode === 'manual' && (s.host || 'localhost') !== 'localhost' ? 'manual' : 'auto');  // V26.1.9: automatic first
   $$('[name=cmode]').forEach(r => r.checked = r.value === m); $('#manualRow').classList.toggle('hidden', m !== 'manual');
+  $('#mHow').textContent = s.connected_how ? `Last connection: ${s.connected_how} (port ${s.port || 10000}).` : '';
   $('#mPort').value = s.port || 10000; $('#mSaved').textContent = s.password_set ? 'A password is saved; leave empty to keep it.' : '';
   $('#cSolver').value = s.solver || 'simulated'; $('#cHost').value = s.host || 'localhost'; $('#cPath').value = s.plxscripting_path || '';
   $('#cRuns').value = s.runs_dir || ''; $('#cRuns').placeholder = s.runs_dir_effective || ''; $('#testOut').textContent = '';

@@ -241,26 +241,34 @@ def test_plain_start_crash_window_then_next_version(pc, monkeypatch):
         return {"ok": True, "port": 10000, "password": "Pw-strong1"}
     monkeypatch.setattr(L, "gui_start_server", start)
     assert L.connect("3d") == ("s", "g")
-    assert started == [[v25], [v24]] and killed == [25]
+    # V26.1.9: each PLAXIS is started first with the F.2.2 server options, then as a double-click when it closes
+    assert [a[0] for a in started] == [v25, v25, v24] and len(started[0]) == 3 and started[1] == [v25]
+    assert started[2][1].startswith("--AppServerPort=") and killed == [25, 25]
     cfg = settings.load()
-    assert cfg["input_exe"] == v24 and cfg["bad_exes"] == [v25]
+    assert cfg["input_exe"] == v24 and cfg["bad_exes"] == [v25] and cfg["plain_exes"] == [v25]
+    assert "options" in cfg["connected_how"]
     assert L._candidates("3d") == [v24, v25]  # next time 2024 first
 
 
 def test_manual_mode_password_typed_in_the_app(pc, client, monkeypatch):
-    """The engineer presses Start server in PLAXIS and pastes the password into the app."""
-    monkeypatch.setattr(L.subprocess, "Popen", lambda *a, **k: pytest.fail("manual mode never starts PLAXIS"))
-    monkeypatch.setattr(L, "gui_start_server", lambda *a, **k: pytest.fail("manual mode never touches PLAXIS' menus"))
+    """The engineer may still paste the password into the app; when it no longer answers, OPTIMUS does not ask for
+    it again but connects by itself (V26.1.9: Walid never opens the scripting server or copies the password)."""
+    monkeypatch.setattr(L.subprocess, "Popen", lambda *a, **k: pytest.fail("PLAXIS is open: no second one"))
     r = client.put("/api/solver/mode", json={"mode": "manual", "port": 10000, "password": "xRmPezxT2T~+zP<2"}).json()
     assert r == {"mode": "manual", "port": 10000, "password_set": True}
+    pc["listen"], pc["accept"] = {10000}, "xRmPezxT2T~+zP<2"
+    assert L.connect("3d") == ("s", "g")  # the pasted password
+    pc["listen"], pc["accept"] = set(), None
     pc["open"] = [{"pid": 7, "name": "Plaxis3DInput.exe", "title": "PLAXIS 3D"}]
-    with pytest.raises(L.ConnectError, match="press Start server"):
-        L.connect("3d")  # server not started yet
-    pc["listen"], pc["accept"] = {10000}, "wrong"
-    with pytest.raises(L.ConnectError, match="did not accept the password"):
-        L.connect("3d")
-    pc["accept"] = "xRmPezxT2T~+zP<2"
-    assert L.connect("3d") == ("s", "g")
+    menu = []
+
+    def gui(pid, progress=None, want_port=0):
+        menu.append(pid)
+        pc["listen"], pc["accept"] = {10000}, "NewPw-from-PLAXIS"
+        return {"ok": True, "port": 10000, "password": "NewPw-from-PLAXIS"}
+    monkeypatch.setattr(L, "gui_start_server", gui)
+    assert L.connect("3d") == ("s", "g")  # server not started: switched on and its password read by OPTIMUS
+    assert menu == [7] and settings.load()["password"] == "NewPw-from-PLAXIS"
     assert client.put("/api/solver/mode", json={"mode": "auto"}).json()["mode"] == "auto"
     assert client.get("/api/settings").json()["connect_mode"] == "auto"
 
