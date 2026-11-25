@@ -423,16 +423,15 @@ def _iface_pc(levels):
     return g, mats, made, boreholes
 
 
-def test_e1_one_copy_per_layer_on_the_pieces(monkeypatch):
+def test_e1_several_layers_no_soil_copies(monkeypatch):
+    """Re-test of d5016d6: soil copies per layer made PLAXIS 24.3 fail at gotostages (ShearStrengthDepthDependency).
+    Along several layers, even when the pieces' levels are known, the adjacent soils take the values: no copies."""
     g, mats, made, bh = _iface_pc([0.5, -3.0, -8.25])
     monkeypatch.setattr(plaxis_model, "read_boreholes", bh)
     done = solver(g)._interfaces(g, {"PositiveInterface_1|L1Sand,L2Sand,L3Sandstone": {"Rinter": 0.5}})
-    assert len(made) == 3 and all(x.Rinter == 0.5 for x in made)
-    assert [x.phi for x in made] == [32.0, 34.0, 38.0] and made[2].cref == 130.0
-    got = [next(iter(p_.Material.values())) for p_ in g.PositiveInterfaces]
-    assert got == made  # each piece the copy of its own layer
-    assert all(x.Rinter == 0.67 for x in mats.values())  # the soils themselves are not changed
-    assert "one material per adjacent layer" in done[0] and "copy of L1Sand" in done[0] and "copy of L3Sandstone" in done[0]
+    assert not made and all(x.Rinter == 0.5 for x in mats.values())
+    assert g.PositiveInterface_1.MaterialMode == "From adjacent soil"
+    assert "set on each adjacent layer (L1Sand, L2Sand, L3Sandstone)" in done[0]
 
 
 def test_e1_without_piece_levels_the_adjacent_soils_take_rinter(monkeypatch):

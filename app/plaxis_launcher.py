@@ -152,7 +152,9 @@ def running_inputs() -> list[dict]:
         name = image_name(w["pid"])
         if re.search(r"(?i)^plaxis.*input.*\.exe$", name):
             out[w["pid"]] = {"pid": w["pid"], "name": name, "title": t}
-    return list(out.values())
+    # re-test of d5016d6 (C1b): PLAXIS 3D 2024 runs helper processes of Plaxis3DInput.exe without a window; the one
+    # with the PLAXIS Input window comes first, so the window automation acts on it
+    return sorted(out.values(), key=lambda p: not (p["title"] and not re.search(r"(?i)output|calculat", p["title"])))
 
 
 def image_name(pid: int) -> str:

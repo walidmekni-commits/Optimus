@@ -131,14 +131,50 @@ def crash_report(pid: int) -> str | None:
 
 
 def main_window(pid: int):
+    """PLAXIS Input's main window (Delphi class TfrmMain first) of process pid."""
     wins = [w for w in windows_of(pid) if not _is_disclaimer(w) and re.search(r"(?i)plaxis", _text(w))]
     if not wins:
         return None
+    frm = [w for w in wins if re.search(r"(?i)^tfrmmain$", _cls(w))]
+    wins = frm or wins
 
     def area(w):
         r = w.rectangle()
         return (r.right - r.left) * (r.bottom - r.top)
     return max(wins, key=area)
+
+
+def _exe(pid: int) -> str:
+    try:
+        from pywinauto.application import process_module
+        return (process_module(pid) or "").replace("/", "\\").split("\\")[-1].lower()
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def input_process(pid: int) -> int:
+    """Re-test of d5016d6 (C1b): PLAXIS 3D 2024 runs helper processes of the same program (its web views) that have
+    no window; the PLAXIS Input window (TfrmMain) is in another process. The process that holds it: pid itself when
+    it has the window, else the one PLAXIS Input window of the same program, else pid."""
+    if main_window(pid) is not None:
+        return pid
+    from pywinauto import Desktop
+    exe = _exe(pid)
+    cands = []
+    for w in Desktop(backend="win32").windows(visible_only=True):
+        if re.search(r"(?i)^tfrmmain$", _cls(w)) and re.search(r"(?i)\bplaxis\b", _text(w)) and \
+                not re.search(r"(?i)output|calculat", _text(w)):
+            try:
+                q = w.process_id()
+            except Exception:  # noqa: BLE001
+                continue
+            if q != pid and (not exe or _exe(q) == exe):
+                cands.append(q)
+    cands = sorted(set(cands))
+    if len(cands) == 1:
+        log(f"process {pid} has no PLAXIS Input window (a PLAXIS helper); using process {cands[0]}")
+        return cands[0]
+    return pid
 
 
 def _dialog(pid: int):
@@ -177,7 +213,7 @@ def _wait_dialog(pid: int, secs: float):
     return None
 
 
-def _via_win32(main, errors: list) -> bool:
+def _via_win32(main, errors: list, opened: bool = False) -> bool:
     """A real Win32 menu bar: the item's command is sent to PLAXIS, no mouse needed."""
     menu = main.menu()
     if menu is None or not menu.item_count():
@@ -192,11 +228,31 @@ def _via_win32(main, errors: list) -> bool:
     subs = exp.sub_menu().items()
     log("win32 Expert: " + ", ".join(_text(s) or "?" for s in subs))
     item = next((s for s in subs if re.search(ITEM, _text(s))), None)
+    if item is not None and not opened:
+        log("win32: selecting " + _text(item))
+        item.select()
+        return True
+    # PLAXIS fills its Expert drop-down only when it opens (its Python items): open it, read it again, click the item
+    try:
+        main.set_focus()
+    except Exception:  # noqa: BLE001
+        pass
+    exp.click_input()
+    time.sleep(0.8)
+    subs = exp.sub_menu().items()
+    log("win32 Expert (opened): " + ", ".join(_text(s) or "?" for s in subs))
+    item = next((s for s in subs if re.search(ITEM, _text(s))), None)
     if item is None:
+        _keys("{ESC}{ESC}")
         errors.append("win32: no remote scripting item under Expert")
         return False
-    log("win32: selecting " + _text(item))
-    item.select()
+    log("win32: clicking " + _text(item))
+    try:
+        item.click_input()
+    except Exception as e:  # noqa: BLE001
+        log(f"win32 click: {type(e).__name__}: {e}; sending its command")
+        _keys("{ESC}{ESC}")
+        item.select()
     return True
 
 
@@ -266,14 +322,17 @@ def open_dialog(pid: int, main) -> object:
     if _dialog(pid):
         return _dialog(pid)
     errors = []
-    try:
-        if _via_win32(main, errors):
+    for opened in (False, True):  # its command sent; else Expert opened by a click and the item clicked
+        try:
+            if not _via_win32(main, errors, opened):
+                break
             d = _wait_dialog(pid, 8)
             if d:
                 return d
-            errors.append("win32: item selected but no dialog")
-    except Exception as e:  # noqa: BLE001
-        errors.append(f"win32 menu: {type(e).__name__}: {e}")
+            errors.append("win32: item " + ("clicked" if opened else "selected") + " but no dialog")
+        except Exception as e:  # noqa: BLE001
+            errors.append(f"win32 menu: {type(e).__name__}: {e}")
+            break
     for way in ("uia", "keys"):
         try:
             try:
@@ -309,6 +368,7 @@ def open_dialog(pid: int, main) -> object:
 
 def menu_report(pid: int) -> dict:
     """What the automation sees of the Expert menu (for QA): Win32 menu, the names after clicking Expert."""
+    pid = input_process(pid)
     main = main_window(pid)
     if main is None:
         return {"main": None}
@@ -348,6 +408,7 @@ def start_server(pid: int, want_port: int | None = None) -> dict:
         time.sleep(1)
     main = None
     for _ in range(40):  # PLAXIS may still be opening
+        pid = input_process(pid)
         main = main_window(pid)
         if main is not None:
             break
@@ -426,7 +487,7 @@ def start_server(pid: int, want_port: int | None = None) -> dict:
     close = _button(dlg, r"(?i)^close$")
     if close is not None:
         close.click()
-    return {"port": port, "password": password}
+    return {"port": port, "password": password, "pid": pid}
 
 
 def main(argv=None) -> int:

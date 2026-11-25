@@ -190,7 +190,7 @@ def test_window_automation_reads_password_and_starts_server(monkeypatch):
     monkeypatch.setattr(G, "windows_of", lambda pid: ([disc] if shown["disclaimer"] else []) + [main, dlg])
     monkeypatch.setattr(G.time, "sleep", lambda s: None)
     r = G.start_server(4242)
-    assert r == {"port": 10000, "password": "xRmPezxT2T~+zP<2"}
+    assert r == {"port": 10000, "password": "xRmPezxT2T~+zP<2", "pid": 4242}
     assert not shown["disclaimer"] and state.text == "The server is running"
     assert any("password read from PLAXIS" in x for x in G.LOG)
 
@@ -433,3 +433,101 @@ def test_server_already_on_with_unreadable_password(monkeypatch):
     r = G.start_server(32560)
     assert r["port"] == 10203 and len(r["password"]) == 16 and pw.text == r["password"]
     assert clicks == ["stop", "start"] and state.text == "The server is running"
+
+
+def test_helper_process_without_window_points_to_the_input_window(monkeypatch):
+    """Re-test of d5016d6 (C1b): the chosen PLAXIS process is a helper without a window; the automation acts on the
+    process of the TfrmMain window of the same program. running_inputs lists the windowed process first."""
+    import sys
+    import types
+    from app import plaxis_gui as G
+
+    class W:
+        def __init__(self, pid, text, cls):
+            self.pid, self.text, self.cls = pid, text, cls
+
+        def window_text(self):
+            return self.text
+
+        def class_name(self):
+            return self.cls
+
+        def process_id(self):
+            return self.pid
+
+        def rectangle(self):
+            class R:
+                left = top = 0
+                right = bottom = 100
+            return R()
+    wins = [W(8720, "PLAXIS 3D Advanced: UA-22.p3d --- SERVER ACTIVE on port 10203 (SECURED)", "TfrmMain"),
+            W(8720, "PLAXIS", "TApplication"), W(999, "PLAXIS Output", "TfrmMain")]
+    desk = types.SimpleNamespace(windows=lambda visible_only=True: wins)
+    fake = types.ModuleType("pywinauto")
+    fake.Desktop = lambda backend="win32": desk
+    app_mod = types.ModuleType("pywinauto.application")
+    app_mod.process_module = lambda pid: {32560: r"C:\P\Plaxis3DInput.exe", 8720: r"C:\P\Plaxis3DInput.exe",
+                                          999: r"C:\P\Plaxis3DOutput.exe"}[pid]
+    monkeypatch.setitem(sys.modules, "pywinauto", fake)
+    monkeypatch.setitem(sys.modules, "pywinauto.application", app_mod)
+    monkeypatch.setattr(G, "windows_of", lambda pid: [w for w in wins if w.pid == pid])
+    G.LOG.clear()
+    assert G.input_process(32560) == 8720 and "using process 8720" in G.LOG[-1]
+    assert G.input_process(8720) == 8720
+    assert G._cls(G.main_window(8720)) == "TfrmMain"
+
+    monkeypatch.setattr(L, "_win", lambda: True)
+    monkeypatch.setattr(L, "_run", lambda args: '"Plaxis3DInput.exe","32560"\n"Plaxis3DInput.exe","8720"\n'
+                        if "imagename eq plaxis3dinput.exe" in " ".join(args).lower() else "")
+    monkeypatch.setattr(L, "gui", lambda action, pid=0, port=0, timeout=90: {"ok": True, "windows": [
+        {"pid": 8720, "title": wins[0].text, "class": "TfrmMain"}]})
+    assert [p["pid"] for p in L.running_inputs()] == [8720, 32560]
+
+
+def test_win32_expert_filled_only_when_opened(monkeypatch):
+    """PLAXIS fills its Expert drop-down when it opens: OPTIMUS opens it with a click, reads it again, clicks the item."""
+    from app import plaxis_gui as G
+    st = {"open": False, "dialog": False}
+
+    class It:
+        def __init__(self, t, sub=None, on=None):
+            self.t, self.sub, self.on = t, sub, on
+
+        def text(self):
+            return self.t
+
+        def sub_menu(self):
+            return self.sub
+
+        def click_input(self):
+            if self.on:
+                self.on()
+
+    item = It("Configure remote scripting server...", on=lambda: st.update(dialog=True))
+
+    class Sub:
+        def items(self):
+            return [It("Examine commands..."), item] if st["open"] else []
+    expert = It("&Expert", Sub(), on=lambda: st.update(open=True))
+
+    class Menu:
+        def item_count(self):
+            return 2
+
+        def items(self):
+            return [It("&File"), expert]
+
+    class Main:
+        handle = 3
+
+        def menu(self):
+            return Menu()
+
+        def set_focus(self):
+            pass
+    monkeypatch.setattr(G.time, "sleep", lambda s: None)
+    monkeypatch.setattr(G, "_dialog", lambda pid: "DLG" if st["dialog"] else None)
+    monkeypatch.setattr(G, "_keys", lambda k: None)
+    G.LOG.clear()
+    assert G.open_dialog(1, Main()) == "DLG"
+    assert any(x.startswith("win32: clicking Configure remote scripting") for x in G.LOG)

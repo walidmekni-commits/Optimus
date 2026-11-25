@@ -379,31 +379,11 @@ class P1Mixin:
                 return out
         return []
 
-    def _piece_level(self, piece):
-        """The mid level of a staged piece of an interface (PLAXIS 3D: its polygon's centre of gravity or points)."""
-        from .plaxis_model import _cog, _surface_points
-        parent = getattr(piece, "Parent", piece)
-        try:
-            c = _cog(piece, parent)
-            if c:
-                return float(c[2])
-        except Exception:  # noqa: BLE001
-            pass
-        try:
-            for pts in _surface_points(piece, parent, True):
-                lv = [float(q[2]) for q in pts if len(q) > 2]
-                if lv:
-                    return (min(lv) + max(lv)) / 2
-        except Exception:  # noqa: BLE001
-            pass
-        return None
-
     def _interfaces(self, g_i, edits: dict) -> list[str]:
         """The interface's own Rinter / virtual thickness. A custom interface material: a copy of it with the new values.
-        'From adjacent soil' (QA V26.1.9 E1): every soil layer along the interface keeps its own properties, each
-        with the new values: one copy per layer set on the interface's pieces in that layer; when PLAXIS does not
-        give the pieces' levels, the values are set on the adjacent soil materials themselves (the interface stays
-        'from adjacent soil')."""
+        'From adjacent soil' (QA V26.1.9 E1): along one layer, a copy of that layer with the new values; along several
+        layers, the new values are set on the adjacent soil materials themselves (the interface stays 'from adjacent
+        soil', each part with its own layer; no soil copies, which PLAXIS 24.3 could not stage)."""
         from .solvers import SolverError
         done = []
         for key, props in edits.items():
@@ -440,27 +420,9 @@ class P1Mixin:
                 self._iface_assign(g_i, name, new)
                 done.append(f"{name}: own material {_name(new)}, a copy of the adjacent soil {lname} ({vals})")
                 continue
-            _try(g_i, "gotostages")
-            pieces = [o for o in self._pieces(g_i, name) if _name(o) != name]
-            levels = {id(o): self._piece_level(o) for o in pieces}
-
-            def layer_of(z):
-                for lay in layers:
-                    if lay[2] is not None and lay[3] - 1e-6 <= z <= lay[2] + 1e-6:
-                        return lay
-                return None
-            per = {id(o): layer_of(levels[id(o)]) if levels[id(o)] is not None else None for o in pieces}
-            if pieces and all(per.values()) and len({per[id(o)][1] for o in pieces}) == len({lay[1] for lay in layers}):
-                copies = {}
-                for lay in layers:
-                    copies[lay[1]] = self._iface_copy(g_i, name, lay[0], props)
-                for o in pieces:
-                    self._iface_assign(g_i, name, copies[per[id(o)][1]], pieces=[o])
-                done.append(f"{name}: one material per adjacent layer ({vals}): " + "; ".join(
-                    f"{_name(o)} → copy of {per[id(o)][1]}" for o in pieces))
-                continue
-            # the pieces' levels are not given by this PLAXIS: the adjacent soils take the values (for the interface
-            # 'from adjacent soil', each part next to its own layer)
+            # several layers: the values are set on the adjacent soil materials themselves, the interface stays
+            # 'from adjacent soil' and each part keeps its own layer. Re-test of d5016d6: one soil copy per layer set on
+            # the pieces made PLAXIS 24.3 fail at gotostages (ShearStrengthDepthDependency sub-objects of the copies)
             _try(g_i, "gotosoil")
             for lay in layers:
                 self._iface_manual(g_i, lay[0], name, props)
