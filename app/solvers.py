@@ -5,6 +5,7 @@ import math
 import json
 import random
 import re
+import time
 import zipfile
 from pathlib import Path
 
@@ -658,16 +659,38 @@ class PlaxisSolver(P1Mixin, P2Mixin):
         unsecured Output server fails on every result with "Syntax of request could not be understood", so both
         ways are tried and the one that answers is kept."""
         from plxscripting.easy import new_server
-        port = g_i.view(phase_i)
-        errors = []
-        for pw in dict.fromkeys([self.password or "", ""]):
+        from . import settings
+        errors, ports = [], []
+
+        def view():
             try:
-                _, g_o = new_server(self.host, port, password=pw)
-                list(g_o.Phases)  # a real request: fails at once when the security does not match
-                return g_o
+                p = int(g_i.view(phase_i) or 0)
             except Exception as e:  # noqa: BLE001
-                errors.append(f"{'secured' if pw else 'unsecured'}: {e}")
-        raise SolverError(f"PLAXIS Output (port {port}) did not answer: " + "; ".join(errors))
+                errors.append(f"view: {e}")
+                p = 0
+            if p > 0 and p != int(self.port or 0) and p not in ports:  # never the Input server's own port
+                ports.append(p)
+            return p
+        # re-test of e56a560: g_i.view() gave port 0 (and once the Input port) with an old Output window open:
+        # asked again, then the port the last Output answered on and the ports PLAXIS Output windows show
+        if not view():
+            time.sleep(3)
+            view()
+        last = int(settings.load().get("output_port") or 0)
+        for p in [last] + _output_window_ports():
+            if p > 0 and p != int(self.port or 0) and p not in ports:
+                ports.append(p)
+        for port in ports:
+            for pw in dict.fromkeys([self.password or "", ""]):
+                try:
+                    _, g_o = new_server(self.host, port, password=pw)
+                    list(g_o.Phases)  # a real request: fails at once when the security does not match
+                    settings.save({"output_port": port})
+                    return g_o
+                except Exception as e:  # noqa: BLE001
+                    errors.append(f"port {port} {'secured' if pw else 'unsecured'}: {e}")
+        raise SolverError("PLAXIS Output did not answer (" + ("; ".join(errors) or "no Output port given by PLAXIS")
+                          + "). Close every PLAXIS Output window, then run again.")
 
     def export_more(self, run_file: Path, keys: list[str], run_dir: Path, say=lambda m, p=None: None) -> list[str]:
         """More PLAXIS Output images of a run already calculated: its saved project is opened in PLAXIS Input,
@@ -783,7 +806,8 @@ class PlaxisSolver(P1Mixin, P2Mixin):
                 info = str(getattr(getattr(p, "LogInfo", None), "value", "0") or "0").strip()
                 if info in ("0", ""):
                     continue
-                kind = str(getattr(getattr(p, "DeformCalcType", None), "value", getattr(p, "DeformCalcType", ""))).lower()
+                # re-test of e56a560: PLAXIS 3D 2024.3 gives the calculation type as a number (4 = Plastic), as in D1
+                kind = calc_type_name(getattr(p, "DeformCalcType", "")).lower()
                 if info == "101" and "plastic" in kind and _obj_name(p) not in tried:
                     ph = p
                 break  # the first failed phase only: the ones after it were not calculated
@@ -793,12 +817,13 @@ class PlaxisSolver(P1Mixin, P2Mixin):
             tried.add(_obj_name(ph))
             _try(g_i, "gotostages")
             for how in (lambda: setattr(ph, "DeformCalcType", "consolidation"),
-                        lambda: g_i.set(ph.DeformCalcType, "Consolidation")):
+                        lambda: g_i.set(ph.DeformCalcType, "Consolidation"), lambda: g_i.set(ph.DeformCalcType, 5)):
                 try:
                     how()
-                    break
                 except Exception:  # noqa: BLE001
                     continue
+                if "consolidation" in calc_type_name(getattr(ph, "DeformCalcType", "")).lower():
+                    break
             else:
                 break
             for how in (lambda: setattr(ph, "TimeInterval", float(days)), lambda: g_i.set(ph.TimeInterval, float(days))):
@@ -1272,6 +1297,22 @@ def _rtype(rgroup, name: str):
         except Exception:  # noqa: BLE001
             continue
     raise SolverError(f"not in this PLAXIS: result {name} (tried {', '.join(RESULT_ALIASES.get(name, [name]))})")
+
+
+def _output_window_ports() -> list[int]:
+    """The scripting ports shown in the titles of the PLAXIS Output windows ('… SERVER ACTIVE on port 10001')."""
+    try:
+        from .plaxis_launcher import gui
+        wins = gui("windows").get("windows") or []
+    except Exception:  # noqa: BLE001
+        return []
+    out = []
+    for w in wins:
+        t = str(w.get("title") or "")
+        m = re.search(r"(?i)port\s+(\d{2,5})", t)
+        if m and re.search(r"(?i)output", t):
+            out.append(int(m.group(1)))
+    return out
 
 
 def _is_safety(phase) -> bool:

@@ -83,8 +83,16 @@ COLLAPSE_DAYS = 7.0
 
 def undrained_in(m: dict, s: dict) -> bool:
     """The model has an Undrained (A) soil, or the study switches a soil's drainage type."""
-    return any(re.search(r"(?i)undrained\s*\(?a", str(x.get("drainage") or "")) for x in (m or {}).get("materials") or []) or \
-        any(str(p.get("item") or "").startswith("drainage:") for p in (s or {}).get("params") or [])
+    # re-test of e56a560: on UA-22 L2 becomes undrained only through a study variable (in any module: the variable
+    # inputs, the puzzle, the modifications), and PLAXIS 3D may give the drainage type as its number (1 = Undrained A)
+    if any(re.search(r"(?i)undrained\s*\(?a|^\s*1(\.0)?\s*$", str(x.get("drainage") or ""))
+           for x in (m or {}).get("materials") or []):
+        return True
+    import json
+    try:
+        return '"drainage:' in json.dumps(s or {})
+    except (TypeError, ValueError):
+        return False
 
 
 def record(text) -> list[list[float]]:

@@ -516,3 +516,69 @@ def test_undrained_warning_says_what_happens_on_collapse():
     m = {"materials": [{"name": "L2MedDenseSand", "props": {"phi": 34, "cref": 0}}]}
     assert "calculates it again once as Consolidation over 7 days" in study.undrained_note(m, "L2MedDenseSand", {})
     assert "switched off" in study.undrained_note(m, "L2MedDenseSand", {"collapse": {"on": False}})
+
+
+def test_collapse_retry_with_numeric_calc_type_and_drainage_variable():
+    """Re-test of e56a560: PLAXIS 3D 2024.3 gives DeformCalcType as a number (4 = Plastic); the days variable is
+    offered when a study variable makes a soil undrained (UA-22: L2 drained in the model)."""
+    import types
+    from app import features
+    from app.solvers import PlaxisSolver
+
+    class V:
+        def __init__(self, v):
+            self.value = v
+    class Ph(types.SimpleNamespace):
+        def __setattr__(self, k, v):
+            if k == "DeformCalcType" and isinstance(v, str):
+                raise ValueError("expects a number")  # this PLAXIS takes only the code
+            super().__setattr__(k, v)
+    ph = Ph(Name=V("Phase_3"), DeformCalcType=V(4), LogInfo=V("101"), ShouldCalculate=True, TimeInterval=V(0))
+    sets = []
+
+    def g_set(prop, val):
+        sets.append(val)
+        if val == 5:
+            ph.DeformCalcType = V(5)
+
+    def calculate():
+        ph.LogInfo = V("0" if ph.DeformCalcType.value == 5 else "101")
+    g = types.SimpleNamespace(Phases=[ph], Materials=[types.SimpleNamespace(DrainageType=V(1))], calculate=calculate,
+                              gotostages=lambda: None, set=g_set)
+    solver = PlaxisSolver.__new__(PlaxisSolver)
+    done, err = solver._retry_collapse(g, 7.0, RuntimeError("Phase_3 failed"))
+    assert err is None and ph.DeformCalcType.value == 5 and done and done[0].startswith("Phase_3 recalculated")
+
+    m = {"version": "3d", "materials": [{"name": "L2", "drainage": "Drained"}], "phases": []}
+    assert not [x for x in features.candidates(m, {}) if x["key"] == "collapse:days"]
+    s = {"puzzle": {"on": True, "runs": [[{"item": "drainage:L2", "value": "Undrained (A): 1"}]]}}
+    assert [x for x in features.candidates(m, s) if x["key"] == "collapse:days"]
+    assert features.undrained_in({"materials": [{"drainage": "1"}]}, {})
+
+
+def test_output_port_zero_falls_back(monkeypatch):
+    """Re-test of e56a560: g_i.view() gave port 0 with an old Output window open: asked again, then the last Output
+    port and the ports of the Output windows; the Input port itself is never used."""
+    import sys
+    import types
+    from app import solvers, settings
+    from app.solvers import PlaxisSolver
+    tried = []
+
+    def new_server(host, port, password=""):
+        tried.append(port)
+        if port != 10005:
+            raise RuntimeError("secured")
+        return None, types.SimpleNamespace(Phases=[1])
+    monkeypatch.setitem(sys.modules, "plxscripting.easy", types.SimpleNamespace(new_server=new_server))
+    monkeypatch.setitem(sys.modules, "plxscripting", types.ModuleType("plxscripting"))
+    monkeypatch.setattr(solvers.time, "sleep", lambda s: None)
+    monkeypatch.setattr(solvers, "_output_window_ports", lambda: [10000, 10005])
+    saved = {}
+    monkeypatch.setattr(settings, "load", lambda: {})
+    monkeypatch.setattr(settings, "save", lambda d: saved.update(d))
+    solver = PlaxisSolver.__new__(PlaxisSolver)
+    solver.host, solver.port, solver.password = "localhost", 10000, "pw"
+    g = types.SimpleNamespace(view=lambda ph: 0)
+    g_o = solver._output(g, None)
+    assert g_o.Phases == [1] and 10000 not in tried and tried[-1] == 10005 and saved == {"output_port": 10005}
