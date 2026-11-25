@@ -123,7 +123,8 @@ def test_d4_interface_from_adjacent_soil_gets_its_soil():
         base = plaxis_model.adjacent_soil(m, itf)
         assert base in {x["name"] for x in m["materials"] if x["kind"] == "soil"}, (v, base)
         c = next(c for c in plaxis_model.candidates(m) if c["key"] == f"iface:{itf['name']}.Rinter")
-        assert c["plaxis_ref"] == f"{itf['name']}|{base}.ifaceRinter"
+        soils = plaxis_model.adjacent_soils(m, itf)
+        assert base in soils and c["plaxis_ref"] == f"{itf['name']}|{','.join(soils)}.ifaceRinter"
     m = plaxis_model.demo("3d")
     itf = dict(m["interfaces"][0], points=[])  # no points read: the plate's
     assert plaxis_model.adjacent_soil(m, itf) in ("", "Clay", "Fill", "Sand")
@@ -364,3 +365,101 @@ def test_n5_quality_with_clusters_and_a_failed_run(client, monkeypatch):
     assert n["k"] == 2 and [r["status"] for r in out["rows"]] == ["succeeded", "failed"]
     from tests.test_workflow import events
     assert out.get("quality") and "quality" not in events(client, pid), "the quality chapter failed"
+
+
+# E1: the interface 'from adjacent soil' along several layers keeps one material per layer
+def test_e1_interface_soils_per_layer_offered():
+    m = plaxis_model.demo("3d")
+    itf = next(x for x in m["interfaces"] if x["side"] == "positive")
+    soils = plaxis_model.adjacent_soils(m, itf)
+    assert len(soils) >= 2 and soils == [l_["material"] for l_ in sorted(m["boreholes"][0]["layers"], key=lambda x: -x["top"])
+                                         if l_["material"] in soils]
+    c = next(c for c in plaxis_model.candidates(m) if c["key"] == f"iface:{itf['name']}.Rinter")
+    assert "per layer:" in c["label"] and ",".join(soils) in c["plaxis_ref"]
+
+
+def _iface_pc(levels):
+    """A fake PLAXIS 3D: a wall interface along three layers, cut into staged pieces at the given levels."""
+    import types
+    from tests.test_v2619_p1 import Staged
+    g = G()
+
+    class Soil(O):
+        _plx_type = "SoilMat"
+    P = lambda x, y, z: types.SimpleNamespace(x=x, y=y, z=z)  # noqa: E731
+    mats = {n: Soil(n, SoilModel=2, Rinter=0.67, phi=p, cref=c, Identification=n)
+            for n, p, c in (("L1Sand", 32.0, 0.0), ("L2Sand", 34.0, 0.0), ("L3Sandstone", 38.0, 130.0))}
+    g.Materials = list(mats.values())
+    for n, x in mats.items():
+        setattr(g, n, x)
+
+    class Poly:
+        def __init__(self, pts, org, cog):
+            self._p, (self.x, self.y, self.z), self.CenterOfGravity = [P(*q) for q in pts], org, P(*cog)
+
+        def __iter__(self):
+            return iter(self._p)
+    wall = Poly([(0, 0, 0), (0, 12, 0), (0, 12, 13.5), (0, 0, 13.5)], (20, -12, -11.5), (20, -6, -4.75))
+    g.PositiveInterface_1 = O("PositiveInterface_1", MaterialMode="From adjacent soil", Parent=wall)
+    g.PositiveInterfaces = [O(f"PositiveInterface_1_{i + 1}", Material=Staged(), MaterialMode=Staged(),
+                              Parent=types.SimpleNamespace(CenterOfGravity=P(20, -6, z)) if z is not None else None)
+                            for i, z in enumerate(levels)]
+    for p_ in g.PositiveInterfaces:
+        if p_.Parent is None:
+            object.__setattr__(p_, "Parent", p_)
+
+    def boreholes(g_i, is3):
+        return [{"name": "BH_1", "x": 0, "y": 0, "head": 0, "layers": [
+            {"name": "Soillayer_1", "material": "L1Sand", "top": 2, "bottom": -1},
+            {"name": "Soillayer_2", "material": "L2Sand", "top": -1, "bottom": -5},
+            {"name": "Soillayer_3", "material": "L3Sandstone", "top": -5, "bottom": -20}]}]
+    made = []
+
+    def soilmat():
+        x = Soil(f"SoilMat_{len(made) + 20}")
+        made.append(x)
+        return x
+    g.soilmat = soilmat
+    return g, mats, made, boreholes
+
+
+def test_e1_one_copy_per_layer_on_the_pieces(monkeypatch):
+    g, mats, made, bh = _iface_pc([0.5, -3.0, -8.25])
+    monkeypatch.setattr(plaxis_model, "read_boreholes", bh)
+    done = solver(g)._interfaces(g, {"PositiveInterface_1|L1Sand,L2Sand,L3Sandstone": {"Rinter": 0.5}})
+    assert len(made) == 3 and all(x.Rinter == 0.5 for x in made)
+    assert [x.phi for x in made] == [32.0, 34.0, 38.0] and made[2].cref == 130.0
+    got = [next(iter(p_.Material.values())) for p_ in g.PositiveInterfaces]
+    assert got == made  # each piece the copy of its own layer
+    assert all(x.Rinter == 0.67 for x in mats.values())  # the soils themselves are not changed
+    assert "one material per adjacent layer" in done[0] and "copy of L1Sand" in done[0] and "copy of L3Sandstone" in done[0]
+
+
+def test_e1_without_piece_levels_the_adjacent_soils_take_rinter(monkeypatch):
+    g, mats, made, bh = _iface_pc([None, None, None])
+    monkeypatch.setattr(plaxis_model, "read_boreholes", bh)
+    done = solver(g)._interfaces(g, {"PositiveInterface_1|L1Sand,L2Sand,L3Sandstone": {"Rinter": 0.5}})
+    assert not made and all(x.Rinter == 0.5 and x.props.get("InterfaceStrengthDetermination") == "Manual"
+                            for x in mats.values())
+    assert g.PositiveInterface_1.MaterialMode == "From adjacent soil"
+    assert "set on each adjacent layer (L1Sand, L2Sand, L3Sandstone)" in done[0]
+
+
+# Walid / Ashraf: the run that always fails at "Anchor Excavation" (L2 medium dense sand switched to Undrained (A))
+def test_undrained_sand_said_before_and_after_the_run():
+    from app import insight
+    m = plaxis_model.demo("3d")
+    m["materials"].append({"name": "L2MedDenseSand", "id": "L2MedDenseSand", "kind": "soil",
+                           "props": {"phi": 34.0, "cref": 0.0, "gammaUnsat": 18.0}})
+    b = study.build(m, {"mode": "combinations", "params": [{"item": "drainage:L2MedDenseSand", "how": "list",
+                                                             "list": "Undrained (A): 1"}], "outputs": ["utot"], "runs": 1})
+    assert any("L2MedDenseSand drains freely" in w and "Consolidation" in w for w in b["warnings"]), b["warnings"]
+    run = {"error": "SolverError: Phase Phase_3 failed: the soil body seems to collapse (PLAXIS LogInfo 101). The PLAXIS "
+                    "file of this run is kept to look at the mechanism: UA-22_run_003_failed.p3d.",
+           "outputs": {"_soil_models": ["L2MedDenseSand: drainage type Undrained (A)"]}, "inputs": {}}
+    d = insight.diagnose(run, [])
+    assert "Phase_3" in d["reason"] and "L2MedDenseSand (Undrained (A))" in d["reason"] and "not an error of OPTIMUS" in d["reason"]
+    assert "Drained" in d["solution"] and "_failed" in d["solution"]
+    clay = study.build(m, {"mode": "combinations", "params": [{"item": "drainage:Clay", "how": "list", "list": "Drained: 0"}],
+                           "outputs": ["utot"], "runs": 1})
+    assert not any("drains freely" in w for w in clay["warnings"])

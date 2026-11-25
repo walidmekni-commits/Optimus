@@ -1028,7 +1028,14 @@ class PlaxisSolver(P1Mixin, P2Mixin):
             if info not in ("0", ""):
                 from .insight import LOGINFO
                 why = LOGINFO.get(info.strip(), f"PLAXIS LogInfo {info}")  # QA V26.1.9 D8: the code said in words
-                raise SolverError(f"Phase {p.Name.value} failed: {why}")
+                kept = ""
+                try:  # V26.1.9: the failed run's PLAXIS file is kept, to see the mechanism in PLAXIS Output
+                    failed_file = run_dir / (path.stem + "_" + run_dir.name + "_failed" + path.suffix)
+                    g_i.save(str(failed_file))
+                    kept = f" The PLAXIS file of this run is kept to look at the mechanism: {failed_file.name}."
+                except Exception:  # noqa: BLE001
+                    pass
+                raise SolverError(f"Phase {p.Name.value} failed: {why}.{kept}")
         if calc_err is not None:
             raise calc_err
 

@@ -2906,7 +2906,8 @@ function renderVItems() {
   const G = gkItems(m), is3 = m.version === '3d', ax = m.axes || (is3 ? ['x', 'y', 'z'] : ['x', 'y']);
   if (!VI.tab || !G[VI.tab]) VI.tab = G.area.some(x => x.load) ? 'area' : G.line.some(x => x.load) ? 'line' : 'point';
   const phl = Object.fromEntries((m.phases || []).map(ph => [ph.name, ph.id || ph.name])), staged = m.staged || [];
-  const stages = n => [...new Set(staged.filter(x => x.object === n).map(x => phl[x.phase] || x.phase))];
+  const act = Object.fromEntries((m.structures || []).map(x => [x.name, x.active || []]));  // E2: SurfaceLoad_1 staged as SurfaceLoad_1_1
+  const stages = n => [...new Set(staged.filter(x => x.object === n || String(x.object || '').startsWith(n + '_')).map(x => x.phase).concat(act[n] || []).map(p => phl[p] || p))];
   const stTxt = n => { const st = stages(n); return st.length ? st.map(esc).join(', ') : staged.length ? '<span class="miss">⚠ no stage</span>' : '—'; };
   const unitOf = (n, k) => { const st = staged.find(x => x.object === n && x.prop === k); const c = PMAP['load:' + n + '.' + k]; return (c && c.unit) || (st && st.unit) || ''; };
   const ck = n => `<input type="checkbox" class="vik" data-n="${esc(n)}"${VI.hl.has(n) ? ' checked' : ''} title="Colour it in the geometry">`;

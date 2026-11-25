@@ -262,11 +262,77 @@ class P1Mixin:
         return done
 
     # --- interfaces ---------------------------------------------------------------------------------------------
-    def _adjacent_soil(self, g_i, itf):
-        """The soil material next to an interface, read in PLAXIS: the borehole layer at the mid level of the
-        interface (or of its plate). Returns (material, its name) or (None, "")."""
+    def _iface_copy(self, g_i, name: str, src, props: dict):
+        """A copy of a soil material with the interface's own values (Rinter used: interface strength Manual)."""
+        from .solvers import SolverError
+        from .plaxis_model import _numeric_attrs
+        _try(g_i, "gotosoil")
+        try:
+            new = g_i.soilmat()
+            new = new[-1] if isinstance(new, (list, tuple)) else new
+        except Exception as e:  # noqa: BLE001
+            raise SolverError(f"{name}: PLAXIS did not create the interface material: {e}")
+        for prop in ("SoilModel", "DrainageType"):
+            try:
+                _set(g_i, new, prop, _val(getattr(src, prop)))
+            except Exception:  # noqa: BLE001
+                pass
+        for prop, val in _numeric_attrs(src).items():
+            try:
+                new.setproperties(prop, val)
+            except Exception:  # noqa: BLE001
+                continue
+        self._iface_manual(g_i, new, name, props)
+        try:
+            _set(g_i, new, "Identification", f"{name} · {_val(getattr(src, 'Identification', '')) or _name(src)} (OPTIMUS)")
+        except Exception:  # noqa: BLE001
+            pass
+        return new
+
+    @staticmethod
+    def _iface_manual(g_i, mat, name: str, props: dict) -> None:
+        from .solvers import SolverError
+        for prop in ("InterfaceStrengthDetermination", "InterfaceStrength"):  # Manual: Rinter is used (not Rigid)
+            for v in ("Manual", 1):
+                try:
+                    _set(g_i, mat, prop, v)
+                    break
+                except Exception:  # noqa: BLE001
+                    continue
+        for prop, val in props.items():
+            try:
+                mat.setproperties(prop, float(val))
+            except Exception as e:  # noqa: BLE001
+                raise SolverError(f"{name}: PLAXIS did not take {prop} = {float(val):g} for the interface material: {e}")
+
+    def _iface_assign(self, g_i, name: str, mat, pieces=None) -> None:
+        """The custom material of the interface (Structures mode) and of its pieces in every stage."""
+        from .solvers import SolverError
+        if pieces is None:
+            _try(g_i, "gotostructures")
+            itf = self._find(g_i, name)
+            try:
+                _set(g_i, itf, "MaterialMode", "Custom")
+            except Exception:  # noqa: BLE001
+                pass
+            try:
+                _set(g_i, itf, "Material", mat)
+            except Exception as e:  # noqa: BLE001
+                raise SolverError(f"{name}: PLAXIS did not take the custom interface material: {e}")
+        _try(g_i, "gotostages")
+        for o in pieces if pieces is not None else self._pieces(g_i, name):
+            for ph in list(g_i.Phases):
+                for prop, val in (("MaterialMode", "Custom"), ("Material", mat)):
+                    try:
+                        _staged_set(o, prop, ph, val, g_i)
+                    except Exception:  # noqa: BLE001
+                        pass
+
+    def _adjacent_layers(self, g_i, itf) -> list[tuple]:
+        """QA V26.1.9 E1: the soil layers the interface runs along, top to bottom: [(material, name, top, bottom)]
+        (first borehole, at the interface's levels read in model coordinates)."""
         from .plaxis_model import _obj_points, _surface_points, read_boreholes
-        is3, readings = False, []
+        readings, is3 = [], False
         for o in (getattr(itf, "Parent", None), itf):
             if o is None:
                 continue
@@ -277,7 +343,7 @@ class P1Mixin:
                     pts = []
                 if pts:
                     is3 = flag and any(len(q) > 2 for q in pts)
-                    try:  # re-QA N1: a 3D surface's points are local to it; its readings in model coordinates first
+                    try:
                         readings += [c for c in _surface_points(itf, o, True) if c] if is3 else []
                     except Exception:  # noqa: BLE001
                         pass
@@ -286,32 +352,64 @@ class P1Mixin:
             if readings:
                 break
         if not readings:
-            return None, ""
+            return []
         vi = 2 if is3 else 1
         _try(g_i, "gotosoil")
         try:
             holes = read_boreholes(g_i, is3)
         except Exception:  # noqa: BLE001
             holes = []
-        for pts in readings:
+        lays = sorted(holes[0]["layers"], key=lambda x: -x["top"]) if holes else []
+        for pts in readings:  # the reading that lies in the ground (N1)
             lv = [float(q[vi]) for q in pts if len(q) > vi]
-            mid = (min(lv) + max(lv)) / 2 if lv else 0.0
-            for lay in (holes[0]["layers"] if holes else []):
-                if lay["bottom"] - 1e-9 <= mid <= lay["top"] + 1e-9 and lay.get("material"):
+            if not lv:
+                continue
+            lo, hi = min(lv), max(lv)
+            mid = (lo + hi) / 2
+            if not any(l_["bottom"] - 1e-9 <= mid <= l_["top"] + 1e-9 for l_ in lays):
+                continue
+            out = []
+            for lay in lays:
+                if min(hi, lay["top"]) - max(lo, lay["bottom"]) > 1e-6 and lay.get("material"):
                     try:
-                        return self._find(g_i, lay["material"]), lay["material"]
+                        out.append((self._find(g_i, lay["material"]), lay["material"], lay["top"], lay["bottom"]))
                     except Exception:  # noqa: BLE001
-                        return None, ""
-        return None, ""
+                        continue
+            if out:
+                return out
+        return []
+
+    def _piece_level(self, piece):
+        """The mid level of a staged piece of an interface (PLAXIS 3D: its polygon's centre of gravity or points)."""
+        from .plaxis_model import _cog, _surface_points
+        parent = getattr(piece, "Parent", piece)
+        try:
+            c = _cog(piece, parent)
+            if c:
+                return float(c[2])
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            for pts in _surface_points(piece, parent, True):
+                lv = [float(q[2]) for q in pts if len(q) > 2]
+                if lv:
+                    return (min(lv) + max(lv)) / 2
+        except Exception:  # noqa: BLE001
+            pass
+        return None
 
     def _interfaces(self, g_i, edits: dict) -> list[str]:
-        """The interface's own Rinter / virtual thickness: a copy of its material (or of the adjacent soil) with the
-        new values, set as the interface's custom material in Structures mode and in every stage."""
+        """The interface's own Rinter / virtual thickness. A custom interface material: a copy of it with the new values.
+        'From adjacent soil' (QA V26.1.9 E1): every soil layer along the interface keeps its own properties, each
+        with the new values: one copy per layer set on the interface's pieces in that layer; when PLAXIS does not
+        give the pieces' levels, the values are set on the adjacent soil materials themselves (the interface stays
+        'from adjacent soil')."""
         from .solvers import SolverError
-        from .plaxis_model import _numeric_attrs
         done = []
         for key, props in edits.items():
             name, _, base = key.partition("|")
+            bases = [b for b in base.split(",") if b]
+            vals = ", ".join(f"{k} = {float(v):g}" for k, v in props.items())
             _try(g_i, "gotostructures")
             itf = self._find(g_i, name)
             src = None
@@ -320,73 +418,54 @@ class P1Mixin:
                     src = _val(itf.Material)
             except Exception:  # noqa: BLE001
                 pass
-            if src is None and base:
-                try:
-                    src = self._find(g_i, base)
-                except Exception:  # noqa: BLE001
-                    src = None
-            if src is None:  # QA V26.1.9 D4: 'from adjacent soil': the soil layer at the interface's mid level
-                src, base = self._adjacent_soil(g_i, itf)
-            if src is None:
+            if src is not None:  # its own material: one copy
+                new = self._iface_copy(g_i, name, src, props)
+                self._iface_assign(g_i, name, new)
+                done.append(f"{name}: own material {_name(new)}, a copy of {_name(src)} ({vals})")
+                continue
+            layers = self._adjacent_layers(g_i, itf)
+            if not layers and bases:
+                for b in bases:
+                    try:
+                        layers.append((self._find(g_i, b), b, None, None))
+                    except Exception:  # noqa: BLE001
+                        continue
+            if not layers:
                 raise SolverError(f"{name}: no material to copy for its own interface properties: it takes its properties "
                                   "from the adjacent soil, and no soil layer of the first borehole was found at its level. "
                                   "Read the model again (Read from PLAXIS) so that its place is read in model coordinates.")
-            _try(g_i, "gotosoil")
-            new = None
-            try:
-                new = g_i.soilmat()
-                new = new[-1] if isinstance(new, (list, tuple)) else new
-            except Exception as e:  # noqa: BLE001
-                raise SolverError(f"{name}: PLAXIS did not create the interface material: {e}")
-            for prop in ("SoilModel", "DrainageType"):
-                try:
-                    _set(g_i, new, prop, _val(getattr(src, prop)))
-                except Exception:  # noqa: BLE001
-                    pass
-            for prop, val in _numeric_attrs(src).items():
-                try:
-                    new.setproperties(prop, val)
-                except Exception:  # noqa: BLE001
-                    continue
-            for prop in ("InterfaceStrengthDetermination", "InterfaceStrength"):  # Manual: Rinter is used (not Rigid)
-                for v in ("Manual", 1):
-                    try:
-                        _set(g_i, new, prop, v)
-                        break
-                    except Exception:  # noqa: BLE001
-                        continue
-            for prop, val in props.items():
-                try:
-                    new.setproperties(prop, float(val))
-                except Exception as e:  # noqa: BLE001
-                    raise SolverError(f"{name}: PLAXIS did not take {prop} = {val:g} for the interface material: {e}")
-            try:
-                _set(g_i, new, "Identification", f"{name} interface (OPTIMUS)")
-            except Exception:  # noqa: BLE001
-                pass
-            _try(g_i, "gotostructures")
-            try:
-                _set(g_i, itf, "MaterialMode", "Custom")
-            except Exception:  # noqa: BLE001
-                pass
-            try:
-                _set(g_i, itf, "Material", new)
-            except Exception as e:  # noqa: BLE001
-                raise SolverError(f"{name}: PLAXIS did not take the custom interface material: {e}")
+            if len(layers) == 1:
+                mat, lname = layers[0][0], layers[0][1]
+                new = self._iface_copy(g_i, name, mat, props)
+                self._iface_assign(g_i, name, new)
+                done.append(f"{name}: own material {_name(new)}, a copy of the adjacent soil {lname} ({vals})")
+                continue
             _try(g_i, "gotostages")
-            for o in self._pieces(g_i, name):
-                for ph in list(g_i.Phases):
-                    for how in (lambda: _staged_set(o, "MaterialMode", ph, "Custom", g_i),):
-                        try:
-                            how()
-                        except Exception:  # noqa: BLE001
-                            pass
-                    try:
-                        _staged_set(o, "Material", ph, new, g_i)
-                    except Exception:  # noqa: BLE001
-                        pass
-            done.append(f"{name}: own material {_name(new)}, a copy of {_name(src)} "
-                        f"({', '.join(f'{k} = {float(v):g}' for k, v in props.items())})")
+            pieces = [o for o in self._pieces(g_i, name) if _name(o) != name]
+            levels = {id(o): self._piece_level(o) for o in pieces}
+
+            def layer_of(z):
+                for lay in layers:
+                    if lay[2] is not None and lay[3] - 1e-6 <= z <= lay[2] + 1e-6:
+                        return lay
+                return None
+            per = {id(o): layer_of(levels[id(o)]) if levels[id(o)] is not None else None for o in pieces}
+            if pieces and all(per.values()) and len({per[id(o)][1] for o in pieces}) == len({lay[1] for lay in layers}):
+                copies = {}
+                for lay in layers:
+                    copies[lay[1]] = self._iface_copy(g_i, name, lay[0], props)
+                for o in pieces:
+                    self._iface_assign(g_i, name, copies[per[id(o)][1]], pieces=[o])
+                done.append(f"{name}: one material per adjacent layer ({vals}): " + "; ".join(
+                    f"{_name(o)} → copy of {per[id(o)][1]}" for o in pieces))
+                continue
+            # the pieces' levels are not given by this PLAXIS: the adjacent soils take the values (for the interface
+            # 'from adjacent soil', each part next to its own layer)
+            _try(g_i, "gotosoil")
+            for lay in layers:
+                self._iface_manual(g_i, lay[0], name, props)
+            done.append(f"{name}: 'from adjacent soil' kept, {vals} set on each adjacent layer ("
+                        + ", ".join(lay[1] for lay in layers) + "); other interfaces next to these layers take it too")
         return done
 
     # --- design approach (EC7 partial factors) ---------------------------------------------------------------------

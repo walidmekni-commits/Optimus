@@ -498,7 +498,10 @@ def model_inputs(m: dict) -> dict:
     mats = {x["name"]: x for x in m.get("materials") or []}
     phl = {ph["name"]: ph.get("id") or ph["name"] for ph in m.get("phases") or []}
     staged = m.get("staged") or []
-    stages = lambda n: ", ".join(dict.fromkeys(phl.get(x["phase"], x["phase"]) for x in staged if x.get("object") == n)) or "—"
+    act = {x["name"]: x.get("active") or [] for x in m.get("structures") or []}
+    mine = lambda o, n: str(o or "") == n or str(o or "").startswith(n + "_")  # E2: SurfaceLoad_1 staged as SurfaceLoad_1_1
+    stages = lambda n: ", ".join(dict.fromkeys([phl.get(x["phase"], x["phase"]) for x in staged if mine(x.get("object"), n)]
+                                               + [phl.get(p, p) for p in act.get(n, [])])) or "—"
     structs = [[s["name"], s.get("kind") or "", s.get("material") or "⚠ none",
                 "; ".join(f"{k} = {S.fmt(float(v)) if S._isnum(v) else v}" for k, v in ((mats.get(s.get("material")) or {}).get("props") or {}).items()) or "—",
                 stages(s["name"])] for s in m.get("structures") or []]

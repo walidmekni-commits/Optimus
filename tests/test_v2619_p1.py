@@ -24,7 +24,9 @@ def test_p1_inputs_are_offered(v):
     assert pre["plaxis_ref"] == "NodeToNodeAnchor_1.PrestressForce@Phase_3" and pre["current"] == 300.0
     assert "prestress:Anchor@Phase_2" not in keys  # the anchor is not active yet
     itf = keys["iface:PositiveInterface_1.Rinter"]
-    assert itf["plaxis_ref"] == "PositiveInterface_1|Clay.ifaceRinter" and "Plate_1" in itf["label"]  # adjacent soil, host
+    soils = ",".join(plaxis_model.adjacent_soils(m, next(x for x in m["interfaces"] if x["name"] == "PositiveInterface_1")))
+    assert itf["plaxis_ref"] == f"PositiveInterface_1|{soils}.ifaceRinter" and "Plate_1" in itf["label"]  # adjacent soils, host
+    assert "Clay" in soils.split(",")
     assert keys["iface:NegativeInterface_1.DeltaInter"]["current"] == 0.1
     assert keys["wlevel:@Phase_4"]["plaxis_ref"] == "WaterLevel.level@Phase_4" and keys["wlevel:@Phase_4"]["current"] == -4.0
     assert "wlevel:@Phase_5" not in keys  # not for the safety phase

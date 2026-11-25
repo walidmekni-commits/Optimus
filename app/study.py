@@ -13,6 +13,7 @@ build() turns it into the variables, targets and runs the engine calculates; res
 summary, a table of three columns and figures. Excel and Word files are made by app.exports.
 """
 import math
+import re
 
 from . import features, geocheck, geosel, plaxis_model
 from .planner import numeric, parse_value, show
@@ -191,6 +192,28 @@ def value_list(p: dict) -> list | None:
     return [_r(v) for v in vals if v is not None]
 
 
+def undrained_note(m: dict, mat_name: str) -> str:
+    """A soil that drains freely (a sand or gravel: by its name, its permeability or c' = 0 with a high φ') switched to
+    Undrained in a plastic excavation: PLAXIS often finds no equilibrium (LogInfo 101, 'soil body collapse'), as in the
+    QA runs on UA-22 (L2 medium dense sand, Undrained (A), Anchor Excavation)."""
+    mat = next((x for x in (m or {}).get("materials") or [] if x.get("name") == mat_name), None)
+    if not mat:
+        return ""
+    pr = mat.get("props") or {}
+    name = f"{mat.get('name')} {mat.get('id') or ''}".lower()
+    k = max([_f(v) or 0.0 for kk, v in pr.items() if re.match(r"(?i)^(perm|k[xyz]$)", kk)] or [0.0])
+    phi = next((_f(pr[x]) for x in ("phi", "Phi", "phiRef") if x in pr), None)
+    c = next((_f(pr[x]) for x in ("cref", "cRef", "CRef", "c") if x in pr), None)
+    permeable = any(w in name for w in ("sand", "gravel")) or k >= 0.1 or (phi is not None and phi >= 28 and (c or 0) <= 1)
+    if not permeable:
+        return ""
+    lab = mat.get("id") or mat_name
+    return (f"{lab} drains freely (a sand or gravel): switched to Undrained it builds excess pore pressures in every "
+            "plastic phase, and PLAXIS may find no equilibrium (soil body collapse, LogInfo 101) in an excavation phase. "
+            "Excavation in sand is drained in practice; for a short-term check use a Consolidation calculation for the "
+            "excavation phases (calculation type in Variable inputs) or Undrained (B) with a measured su.")
+
+
 def param_values(p: dict, var: dict, n: int, distribution: str) -> list:
     """The value of one parameter in each of n runs (None keeps the existing value)."""
     lst = value_list(p) if var["kind"] != "values" else None
@@ -279,6 +302,11 @@ def build(m: dict, study: dict) -> dict:
                 var["min"], var["max"] = min(lo, hi), max(lo, hi)
         variables.append(var)
         params.append((p, var))
+    for p, var in params:  # V26.1.9 (QA runs on UA-22): an undrained switch of a permeable soil in an excavation
+        if str(p.get("item") or "").startswith("drainage:"):
+            w = undrained_note(m, p["item"][len("drainage:"):])
+            if w:
+                warnings.append(w)
     if screening:  # Sensitivity Detector of the inputs: each item changed alone by the same step
         for key in screen.get("items") or []:
             c = cands.get(key)

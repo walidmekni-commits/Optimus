@@ -1274,6 +1274,39 @@ def adjacent_soil(m: dict, itf: dict) -> str:
     return soil_at(m, pts)
 
 
+def adjacent_soils(m: dict, itf: dict) -> list[str]:
+    """QA V26.1.9 E1: every soil layer the interface runs along, top to bottom (first borehole; in 2D the soil
+    polygons next to it on its side): 'from adjacent soil' gives each part of the interface its own layer."""
+    pts = itf.get("points") or next((st.get("points") for st in m.get("structures") or []
+                                     if st["name"] == host_of(m, itf.get("points"))), None) or []
+    out: list[str] = []
+    if m.get("version") != "3d" and len(pts) >= 2 and m.get("soil_polygons"):
+        (x1, y1), (x2, y2) = [(float(q[0]), float(q[1])) for q in pts[:2]]
+        L = math.hypot(x2 - x1, y2 - y1) or 1.0
+        nx, ny = -(y2 - y1) / L, (x2 - x1) / L
+        sgn = -1.0 if itf.get("side") == "negative" else 1.0
+        if y2 > y1:
+            (x1, y1), (x2, y2) = (x2, y2), (x1, y1)
+        for k in range(41):  # along the interface, top to bottom
+            t = k / 40
+            px, py = x1 + t * (x2 - x1) + sgn * nx * 0.05, y1 + t * (y2 - y1) + sgn * ny * 0.05
+            for sp in m["soil_polygons"]:
+                if _inside(px, py, [(float(q[0]), float(q[1])) for q in sp.get("points") or []]):
+                    if sp.get("material") and sp["material"] not in out:
+                        out.append(sp["material"])
+                    break
+        if out:
+            return out
+    if pts and m.get("boreholes"):
+        vi = 2 if m.get("version") == "3d" else 1
+        lv = [float(q[vi]) for q in pts if len(q) > vi]
+        lo, hi = min(lv), max(lv)
+        for lay in sorted(m["boreholes"][0].get("layers") or [], key=lambda x: -x["top"]):
+            if min(hi, lay["top"]) - max(lo, lay["bottom"]) > 1e-6 and lay.get("material") and lay["material"] not in out:
+                out.append(lay["material"])
+    return out or [x for x in [adjacent_soil(m, itf)] if x]
+
+
 def _inside(x: float, y: float, poly: list) -> bool:
     inside = False
     for (x1, y1), (x2, y2) in zip(poly, poly[1:] + poly[:1]):
@@ -1318,13 +1351,17 @@ def p1_structures(m: dict, add) -> None:
                 "; ".join(f"{a['name']}.PrestressForce@{ph['name']}" for a in anchors), "kN", float(cur))
     for itf in m.get("interfaces") or []:
         host = host_of(m, itf.get("points"))
-        base = itf.get("material") if "custom" in str(itf.get("mode") or "").lower() and itf.get("material") else adjacent_soil(m, itf)
-        bmat = next((x for x in m.get("materials") or [] if x["name"] == base), {})
+        custom = "custom" in str(itf.get("mode") or "").lower() and itf.get("material")
+        bases = [itf["material"]] if custom else adjacent_soils(m, itf)  # E1: one copy per adjacent layer
+        mats = {x["name"]: x for x in m.get("materials") or []}
+        bmat = mats.get(bases[0], {}) if bases else {}
+        ids = ", ".join(mats.get(b, {}).get("id") or b for b in bases)
         grp = f"Interface · {itf['name']}" + (f" along {host}" if host else "")
         for prop, lab, unit, dflt in (("Rinter", "strength reduction Rinter", "-", 1.0), ("DeltaInter", "virtual thickness factor δinter", "-", 0.1)):
             cur = (bmat.get("props") or {}).get(prop, dflt)
-            add(f"iface:{itf['name']}.{prop}", "structures", grp, f"{itf['name']}{' (' + host + ')' if host else ''} own {lab}",
-                f"{itf['name']}|{base}.iface{prop}", unit, float(cur))
+            per = f" (its material {ids})" if custom else (f" (per layer: {ids})" if len(bases) > 1 else f" ({ids})" if ids else "")
+            add(f"iface:{itf['name']}.{prop}", "structures", grp, f"{itf['name']}{' (' + host + ')' if host else ''} own {lab}{per}",
+                f"{itf['name']}|{','.join(bases)}.iface{prop}", unit, float(cur))
     for c in m.get("contractions") or []:
         if c.get("value") is not None and not any(sv["object"] == c["name"] for sv in m.get("staged") or []):
             add(f"contraction:{c['name']}", "structures", "Tunnel contraction (volume loss)", f"{c['name']} contraction Cref",

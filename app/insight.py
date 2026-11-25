@@ -84,10 +84,36 @@ def diagnose(run: dict, variables: list[dict] | None = None) -> dict:
         if not reason:
             reason, sol = f"PLAXIS stopped with: {what}", ("Open the run file in PLAXIS Input and check the log of the "
                                                           "failed phase; correct the input and press Restart.")
+    undr = _undrained_switch(run, variables or [])
+    if undr and re.search(r"collapse|LogInfo\s*101|did not converge", err, re.I):
+        phase = re.search(r"Phase (\S+) failed", err)
+        reason = (f"The calculation found no equilibrium{(' in ' + phase.group(1)) if phase else ''} after {undr} was "
+                  "switched to undrained behaviour: the switch reached PLAXIS, and with it the excavation builds excess "
+                  "pore pressures that the model cannot carry. This is the answer of the model to that input, not an "
+                  "error of OPTIMUS.")
+        sol = ("If the layer is a sand or gravel, the excavation is drained in practice: keep it Drained. For a "
+               "short-term check, use a Consolidation calculation type for the excavation phases, or Undrained (B) with a "
+               "measured su. Open the kept PLAXIS file of the run (…_failed) in PLAXIS Output, last step of the failed "
+               "phase, to see the mechanism.")
     extreme = _extremes(run, variables or [])
     if extreme:
         sol += " This run uses " + "; ".join(extreme) + "."
     return {"reason": reason, "solution": sol}
+
+
+def _undrained_switch(run: dict, variables: list[dict]) -> str:
+    """The soil a run switched to an undrained drainage type, from what the run set in PLAXIS or from its inputs."""
+    for x in (run.get("outputs") or {}).get("_soil_models") or []:
+        m_ = re.match(r"\s*([^:]+):\s*drainage type\s+(Undrained[^;,]*)", str(x), re.I)
+        if m_:
+            return f"{m_.group(1).strip()} ({m_.group(2).strip()})"
+    for v in variables:
+        ref = str(v.get("plaxis_ref") or "")
+        if ref.lower().endswith(".drainagetype"):
+            x = _x(v, (run.get("inputs") or {}).get(v["name"]))
+            if x is not None and 1 <= round(x) <= 3:
+                return f"{ref.rsplit('.', 1)[0]} (Undrained ({'ABC'[round(x) - 1]}))"
+    return ""
 
 
 def _extremes(run: dict, variables: list[dict]) -> list[str]:
