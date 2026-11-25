@@ -203,3 +203,97 @@ def test_d14_features_grouped_in_section_2():
     dom = {p["key"]: p["domain"] for p in cat["params"]}
     assert dom["add:N1"] == dom["prestress:Anchor@Phase_3"] == dom["design:approach"] == "features"
     assert cat["domains"]["features"] == "PLAXIS features"
+
+
+# re-QA D5: every enumerated / staged PLAXIS property of the study page reaches its own handler in a run (the
+# steady-state flow was set by the generic path because of a misspelt property name)
+class _Stop(Exception):
+    pass
+
+
+@pytest.mark.parametrize("v", ["2d", "3d"])
+def test_every_special_input_reaches_its_handler(v, tmp_path, monkeypatch):
+    import types
+    from app.schema import Variable
+    m = plaxis_model.demo(v)
+    cands = {c["key"]: c for c in plaxis_model.candidates(m)}
+    want = {"pore:": "_pore_type", "drainage:": "_drainage", "smodel:": "_soil_model"}
+    picked = [(k, c, h) for pre, h in want.items() for k, c in cands.items() if k.startswith(pre)][:12]
+    assert {h for *_, h in picked} == set(want.values())
+    calls = []
+    sv = PlaxisSolver.__new__(PlaxisSolver)
+    sv.additions, sv.dynamic, sv.safety_after = {}, None, []
+    monkeypatch.setattr(PlaxisSolver, "_base_model", lambda self, f, d: tmp_path / ("m.p3d" if v == "3d" else "m.p2dx"))
+    s_i = types.SimpleNamespace(open=lambda p: None)
+    monkeypatch.setattr(PlaxisSolver, "_connect", lambda self, ver="3d": (s_i, object()))
+    for h in want.values():
+        monkeypatch.setattr(PlaxisSolver, h, lambda self, g, name, code, *a, _h=h, **k: calls.append((_h, name)) or _h)
+
+    def generic(self, g, name):
+        raise AssertionError(f"{name} went to the generic PLAXIS set")
+    monkeypatch.setattr(PlaxisSolver, "_find", generic)
+    monkeypatch.setattr(PlaxisSolver, "_p2_geometry", lambda self, *a: (_ for _ in ()).throw(_Stop()))
+    import sys
+    easy = types.ModuleType("plxscripting.easy")
+    easy.new_server = lambda *a, **k: None
+    monkeypatch.setitem(sys.modules, "plxscripting", types.ModuleType("plxscripting"))
+    monkeypatch.setitem(sys.modules, "plxscripting.easy", easy)
+    vs = [Variable(name=f"x{i}", label=c["label"], unit="", plaxis_ref=c["plaxis_ref"], kind="values", min=None, max=None,
+                   step=None, values=c["values"], current=None, section=c["section"]) for i, (k, c, h) in enumerate(picked)]
+    ins = {f"x{i}": float(c["values"][-1].rsplit(": ", 1)[1]) for i, (k, c, h) in enumerate(picked)}
+    with pytest.raises(_Stop):
+        sv.run([], ins, vs, [], tmp_path)
+    assert {h for h, _ in calls} == set(want.values()), calls
+
+
+# re-QA N1: a PLAXIS 3D surface's points are local to it; the wall is read at x = 20, below the ground
+def test_n1_wall_read_in_model_coordinates():
+    import types
+    P = lambda x, y, z: types.SimpleNamespace(x=x, y=y, z=z)  # noqa: E731
+    poly = types.SimpleNamespace(Points=[P(0, 0, 0), P(0, 12, 0), P(0, 12, 13.5), P(0, 0, 13.5)],
+                                 LocalOrigin=P(20, 0, 2), LocalAxis1=P(0, -1, 0), LocalAxis2=P(0, 0, -1))
+    plate = types.SimpleNamespace(Parent=poly)
+    alts = plaxis_model._surface_points(plate, poly, True)
+    assert len(alts) >= 2
+    m = {"version": "3d", "points": [], "notes": [], "interfaces": [], "loads": [], "contractions": [], "displacements": [],
+         "boreholes": [{"name": "BH_1", "x": 0, "y": 0, "layers": [{"name": "L1", "material": "Fill", "top": 2, "bottom": -3},
+                                                                  {"name": "L2", "material": "Sand", "top": -3, "bottom": -30}]}],
+         "structures": [{"kind": "plate", "name": "Plate_1", "points": alts[0], "_alts": alts},
+                        {"kind": "anchor", "name": "Anchor_1", "points": [[20, -6, -1], [32, -6, -7]]},
+                        {"kind": "beam", "name": "Beam_1", "points": [[20, 0, 1], [20, -12, 1]]}]}
+    m["interfaces"].append({"name": "PositiveInterface_1", "side": "positive", "points": alts[0], "_alts": list(alts)})
+    plaxis_model._resolve_globals(m)
+    wall = m["structures"][0]["points"]
+    assert all(abs(q[0] - 20) < 1e-6 for q in wall)
+    assert min(q[1] for q in wall) == pytest.approx(-12) and max(q[2] for q in wall) == pytest.approx(2)
+    assert "_alts" not in m["structures"][0] and not m["notes"]
+    assert plaxis_model.adjacent_soil(m, m["interfaces"][0]) == "Sand"  # D4: mid level -4.75 m, in the ground
+    # a surface with no local frame is kept as read, and said when it lies above the ground
+    m2 = dict(m, notes=[], structures=[{"kind": "plate", "name": "Plate_2", "points": alts[-1], "_alts": [alts[-1]]}],
+              interfaces=[])
+    plaxis_model._resolve_globals(m2)
+    assert any("Plate_2" in n for n in m2["notes"])
+
+
+# re-QA D7: the soil contour, not the points and structures, bounds the model
+def test_d7_soil_contour_bounds_the_result_points():
+    m = plaxis_model.demo("3d")
+    m["contour"] = {"xmin": 0, "xmax": 100, "ymin": 0, "ymax": 20}
+    w = features.probe_checks(m, {"probes": [{"name": "Far", "x": 80, "y": 5, "z": -2}]})
+    assert not any("Far" in x for x in w), w
+    m.pop("contour")
+    w = features.probe_checks(m, {"probes": [{"name": "Far", "x": 80, "y": 5, "z": -2}]})
+    assert any("beyond the points and structures" in x for x in w) and not any("outside the model" in x for x in w)
+
+
+# re-QA N2: only a lost link to PLAXIS is retried; a collapse, a refused value or a missing material is not
+def test_n2_errors_that_repeat_are_not_retried():
+    import app.solvers as S
+    for e in ("SolverError: PositiveInterface_1: no material to copy for its own interface properties",
+              "PlxScriptingError: Incorrect new value for: PorePresCalcType",
+              "SolverError: Phase Phase_3 failed: the soil body seems to collapse (PLAXIS LogInfo 101)",
+              "PlxScriptingError: Phase_3: Soil body seems to collapse", "KeyError: 'Name'"):
+        assert S.deterministic(e), e
+    for e in ("ConnectionError: PLAXIS did not answer", "requests.exceptions.ReadTimeout: timed out",
+              "PermissionError: [WinError 32] The process cannot access the file because it is being used by another process"):
+        assert not S.deterministic(e), e

@@ -21,7 +21,8 @@ SAFETY_ID = "OPTIMUS safety after"   # Identification of the safety phases OPTIM
 DYNAMIC_ID = "OPTIMUS dynamic"        # Identification of the dynamic phase OPTIMUS adds
 SAFETY_PHASE = "@safety:"             # target phase: the safety phase added after the stage that follows
 DYNAMIC_PHASE = "@dynamic"            # target phase: the dynamic phase added by OPTIMUS
-PROBE_QTY = [("utot", "|u|", "Soil.Utot"), ("ux", "ux", "Soil.Ux"), ("uv", None, None)]
+PROBE_QTY = [("utot", "|u|", "Soil.Utot"), ("ux", "ux", "Soil.Ux"), ("uv", None, None),
+             ("pact", "active pore pressure (uplift)", "Soil.PActive")]  # V26.1.9 (P2): uplift at the base
 
 
 def _f(x):
@@ -60,9 +61,38 @@ def clean(s: dict) -> dict:
     d = s.get("dynamic") or {}
     out["dynamic"] = {"on": bool(d.get("on")), "after": str(d.get("after") or ""), "source": str(d.get("source") or "base"),
                       "amplitude": _f(d.get("amplitude")) if _f(d.get("amplitude")) is not None else 0.01,
-                      "frequency": _f(d.get("frequency")) or 2.0, "duration": _f(d.get("duration")) or 5.0}
+                      "frequency": _f(d.get("frequency")) or 2.0, "duration": _f(d.get("duration")) or 5.0,
+                      # V26.1.9 (P2): an earthquake record (time, acceleration) instead of the harmonic signal
+                      "signal": "record" if d.get("signal") == "record" else "harmonic",
+                      "units": "g" if d.get("units") == "g" else "m/s2", "name": str(d.get("name") or "")[:60],
+                      "scale": _f(d.get("scale")) if _f(d.get("scale")) is not None else 1.0,
+                      "record": record(d.get("record"))}
+    if out["dynamic"]["signal"] == "record" and out["dynamic"]["record"]:
+        out["dynamic"]["duration"] = _f(d.get("duration")) or out["dynamic"]["record"][-1][0]
     out["tunnel"] = {"d": _f((s.get("tunnel") or {}).get("d"))}
     return out
+
+
+def record(text) -> list[list[float]]:
+    """V26.1.9 (P2): an earthquake record pasted as lines 'time acceleration' (spaces, tabs, commas or semicolons;
+    header lines and comments skipped), at most 20000 points, times increasing."""
+    if isinstance(text, list):
+        rows = text
+    else:
+        rows = []
+        for ln in str(text or "").splitlines():
+            nums = re.findall(r"-?\d+(?:[.,]\d+)?(?:[eE][-+]?\d+)?", ln.replace(",", " ") if ";" not in ln and ln.count(",") == 1 and "." in ln else ln.replace(";", " "))
+            if len(nums) >= 2:
+                rows.append(nums[:2])
+    out = []
+    for r in rows[:20000]:
+        try:
+            t, a = float(str(r[0]).replace(",", ".")), float(str(r[1]).replace(",", "."))
+        except (TypeError, ValueError, IndexError):
+            continue
+        if not out or t > out[-1][0]:
+            out.append([t, a])
+    return out if len(out) >= 2 else []
 
 
 def added_spec(m: dict, a: dict) -> dict | None:
@@ -99,7 +129,11 @@ def candidates(m: dict, s: dict) -> list[dict]:
         add(f"addshift:{a['id']}", "New structures", f"Level of the {what}: shift in {up}", f"{sp['name']}.shift{up}",
             "m", 0.0)
     d = o["dynamic"]
-    if d["on"]:
+    if d["on"] and d["signal"] == "record" and d["record"]:
+        add("dyn:scale", "Dynamic load", f"Earthquake record scale factor ({d['name'] or 'record'}, {len(d['record'])} points)",
+            "Dynamic.scale", "×", d["scale"], section="stages")
+        add("dyn:duration", "Dynamic load", "Dynamic time interval", "Dynamic.duration", "s", d["duration"], section="stages")
+    elif d["on"]:
         unit = "m" if d["source"] == "base" else ("kN/m²" if is3 else "kN/m/m")
         add("dyn:amplitude", "Dynamic load", "Dynamic amplitude" + (" (base displacement)" if d["source"] == "base" else f" ({d['source']})"),
             "Dynamic.amplitude", unit, d["amplitude"], section="stages")
@@ -124,7 +158,7 @@ def outputs(m: dict, s: dict) -> list[dict]:
         for q, lab, res in PROBE_QTY:
             lab = lab or ("uz" if is3 else "uy")
             res = res or f"Soil.{up}"
-            add(f"probe{i}:{q}", f"{lab} at {p['name']} ({at.replace(';', ', ')})", f"{res}|at {at}", "m")
+            add(f"probe{i}:{q}", f"{lab} at {p['name']} ({at.replace(';', ', ')})", f"{res}|at {at}", "kN/m²" if q == "pact" else "m")
     d = (o["tunnel"] or {}).get("d")
     if d or m.get("tunnels") or m.get("contractions"):
         if d:
@@ -189,9 +223,16 @@ def describe(m: dict, s: dict) -> list[list[str]]:
         rows.append([f"New structure New_{a['id']}", txt])
     d = o["dynamic"]
     if d["on"]:
-        rows.append(["Dynamic phase", f"harmonic, {'base shaking' if d['source'] == 'base' else 'on ' + d['source']}, after "
-                     f"{ids.get(d['after'], d['after']) or '(no stage chosen)'}: amplitude {d['amplitude']:g}, "
-                     f"{d['frequency']:g} Hz, {d['duration']:g} s, viscous boundaries"])
+        if d["signal"] == "record" and d["record"]:
+            pk = max(abs(a) for _, a in d["record"])
+            rows.append(["Dynamic phase", f"earthquake record {d['name'] or ''} ({len(d['record'])} points, peak "
+                         f"{pk:g} {'g' if d['units'] == 'g' else 'm/s²'}, × {d['scale']:g}) "
+                         f"{'at the model base' if d['source'] == 'base' else 'on ' + d['source']}, after "
+                         f"{ids.get(d['after'], d['after']) or '(no stage chosen)'}, {d['duration']:g} s, viscous boundaries"])
+        else:
+            rows.append(["Dynamic phase", f"harmonic, {'base shaking' if d['source'] == 'base' else 'on ' + d['source']}, after "
+                         f"{ids.get(d['after'], d['after']) or '(no stage chosen)'}: amplitude {d['amplitude']:g}, "
+                         f"{d['frequency']:g} Hz, {d['duration']:g} s, viscous boundaries"])
     if (o["tunnel"] or {}).get("d"):
         rows.append(["Tunnel diameter (volume loss)", f"D = {o['tunnel']['d']:g} m"])
     return rows
@@ -211,7 +252,14 @@ def probe_checks(m: dict, s: dict) -> list[str]:
     from .plaxis_model import _inside
     o = clean(s or {})
     is3 = (m or {}).get("version") == "3d"
-    e = (m or {}).get("extents") or {}
+    e = dict((m or {}).get("extents") or {})
+    sc = (m or {}).get("contour")  # re-QA D7: the soil volume (PLAXIS soil contour), not the points and structures
+    if sc:
+        e.update(sc)
+    lays = [lay for b in (m or {}).get("boreholes") or [] for lay in b.get("layers") or []]
+    if is3 and lays:
+        e["zmin"] = min(lay["bottom"] for lay in lays)
+        e["zmax"] = max(lay["top"] for lay in lays)
     out = []
     for p in o["probes"]:
         x, y, z = p["x"], p["y"], p["z"]
@@ -220,8 +268,12 @@ def probe_checks(m: dict, s: dict) -> list[str]:
         span = [("x", x, e.get("xmin"), e.get("xmax")), ("y", y, e.get("ymin"), e.get("ymax"))] + \
                ([("z", z, e.get("zmin"), e.get("zmax"))] if is3 else [])
         bad = [a for a, v, lo, hi in span if lo is not None and hi is not None and not (lo - 1e-6 <= v <= hi + 1e-6)]
-        if bad:
-            out.append(f"{lab}: outside the model ({', '.join(bad)} beyond its extents): PLAXIS will give no value.")
+        if bad and (sc or bad == ["z"]):
+            out.append(f"{lab}: outside the model ({', '.join(bad)} beyond its soil volume): PLAXIS will give no value.")
+            continue
+        if bad:  # no soil contour read: only the points and structures are known, PLAXIS may still give a value
+            out.append(f"{lab}: beyond the points and structures read ({', '.join(bad)}); check it is inside the soil "
+                       "volume of the model.")
             continue
         if not is3 and m.get("soil_polygons"):
             if not any(_inside(x, y - 1e-3, [(float(q[0]), float(q[1])) for q in sp.get("points") or []]) for sp in m["soil_polygons"]):

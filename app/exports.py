@@ -568,7 +568,8 @@ def model_checks(m: dict) -> list[str]:
             out.append(f"{ld['name']}: no load value was read.")
         elif all(float(v) == 0 for v in vals):
             out.append(f"{ld['name']}: every load value is 0.")
-        if staged and not any(x.get("object") == ld["name"] for x in staged):
+        if staged and not any(str(x.get("object") or "") == ld["name"] or str(x.get("object") or "").startswith(ld["name"] + "_")
+                              for x in staged):  # re-QA N3: PLAXIS 3D stages the load as SurfaceLoad_1_1
             out.append(f"{ld['name']}: not active in any stage.")
     for s in m.get("structures") or []:
         if not s.get("material"):

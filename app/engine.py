@@ -141,7 +141,9 @@ def _run_task(task_id: str) -> None:
     db.log("result", result, pid, task_id)
     db.add_message(pid, "assistant", result["text"])
     if failed:
-        msg = f"{len(failed)} of {len(runs)} run(s) failed after {retries + 1} attempt(s) each."
+        tries = sorted({int(r.get("attempts") or 1) for r in failed})  # N2: an error that repeats is not retried
+        msg = (f"{len(failed)} of {len(runs)} run(s) failed"
+               + (f" after {tries[0]} attempt(s) each." if len(tries) == 1 else f" after {tries[0]} to {tries[-1]} attempts."))
         return _fail(task, pid, msg, failed)
     if plan.get("basic") and not plan.get("example"):
         _remember_basic(pid, project, plan, solver, runs)

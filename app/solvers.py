@@ -881,7 +881,7 @@ class PlaxisSolver(P1Mixin, P2Mixin):
                 if pl == "drainagetype":  # V26.1.9: Drained, Undrained A / B / C, Non-porous
                     soil_models.append(self._drainage(g_i, obj_name, int(round(value))))
                     continue
-                if pl == "porepresscalctype":  # V26.1.9: phreatic or steady-state groundwater flow
+                if pl == "poreprescalctype":  # V26.1.9: phreatic or steady-state groundwater flow (re-QA D5: spelling fixed)
                     staged_done.append(self._pore_type(g_i, obj_name, int(round(value))))
                     continue
                 if obj_name == "WaterLevel" and pl == "level" and phase:  # V26.1.9: water level per stage
@@ -1017,7 +1017,11 @@ class PlaxisSolver(P1Mixin, P2Mixin):
             if lines:
                 (run_dir / fname).write_text("\n".join(lines), encoding="utf-8")
         say(f"Calculating every phase in PLAXIS ({len(list(g_i.Phases))} phases); a 3D model can take a long time", 40)
-        g_i.calculate()
+        try:
+            g_i.calculate()
+            calc_err = None
+        except Exception as e:  # noqa: BLE001 - PLAXIS 3D can raise when a phase fails: its LogInfo says why (N2, D8)
+            calc_err = e
         say("Checking the phases and saving the run", 85)
         for p in g_i.Phases:
             info = str(getattr(getattr(p, "LogInfo", None), "value", "0") or "0")
@@ -1025,6 +1029,8 @@ class PlaxisSolver(P1Mixin, P2Mixin):
                 from .insight import LOGINFO
                 why = LOGINFO.get(info.strip(), f"PLAXIS LogInfo {info}")  # QA V26.1.9 D8: the code said in words
                 raise SolverError(f"Phase {p.Name.value} failed: {why}")
+        if calc_err is not None:
+            raise calc_err
 
         run_file = run_dir / (path.stem + "_" + run_dir.name + path.suffix)
         g_i.save(str(run_file))
@@ -1182,15 +1188,26 @@ def _is_safety(phase) -> bool:
     return False
 
 
+TRANSIENT = ("connection", "could not reach", "did not answer", "timed out", "timeout", "refused", "reset by peer",
+             "broken pipe", "remote scripting server", "no active project", "no result from plaxis", "server is busy",
+             "being used by another process", "permission denied", "winerror 32", "temporarily", "eof occurred")
+
+
 def deterministic(err: str) -> bool:
     """A PLAXIS error that the same inputs will give again (an invalid material, a property PLAXIS does not know, a
-    geometry PLAXIS refused): retrying it only repeats a 10-minute calculation (QA V26.1.8)."""
+    geometry PLAXIS refused, a phase that collapses): retrying it only repeats a calculation of up to half an hour (QA
+    V26.1.8; re-QA V26.1.9 N2: 'no material to copy', 'Incorrect new value', LogInfo 101 were calculated 4 times).
+    QA V26.1.9 N2: only an error of the link to PLAXIS (connection lost, timeout, a file locked by OneDrive) is retried;
+    every other error, known or not, is given at once."""
     e = (err or "").lower()
-    return any(k in e for k in ("invalid material", "unknown property", "is not a number", "did not take the new geometry",
-                                "not found", "no plaxis reference", "overlap", "is invalid", "not in this model", "soil model", "failed (loginfo", "plaxis loginfo",
-                                # V26.1.9: a feature this PLAXIS refuses gives the same answer again
-                                "drainage type", "did not draw", "dynamic", "interface material", "safety phase",
-                                "pore pressure calculation", "water level", "water condition", "could not set", "exist in plaxis 3d only"))
+    if any(k in e for k in ("invalid material", "unknown property", "is not a number", "did not take the new geometry",
+                            "not found", "no plaxis reference", "overlap", "is invalid", "not in this model", "soil model",
+                            "loginfo", "drainage type", "did not draw", "dynamic", "interface material", "safety phase",
+                            "pore pressure calculation", "water level", "water condition", "could not set",
+                            "exist in plaxis 3d only", "no material to copy", "incorrect new value", "collapse",
+                            "did not converge", "not enough load steps", "ultimate state", "load advancement", "failed:")):
+        return True
+    return not any(k in e for k in TRANSIENT)
 
 
 def _try(g_i, mode: str) -> None:

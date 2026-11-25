@@ -297,6 +297,181 @@ def _obj_points(obj, is_3d: bool) -> list:
     return []
 
 
+# QA V26.1.9 re-QA N1: PLAXIS 3D gives the points of a surface (a plate, an interface, a surface load) in the
+# surface's own local frame: UA-22's wall came back as (0, 0, 0) - (0, 12, 13.5) instead of x = 20, y 0 to -12, below
+# the ground. The points are turned into model coordinates through the surface's origin and local axes; where PLAXIS
+# gives more than one reading, the one that meets the anchors / beams and lies in the ground is kept.
+ORIGIN_NAMES = ("LocalOrigin", "Origin", "LocalOriginPoint", "Position")
+AXIS_NAMES = (("LocalAxis1", "LocalAxis2"), ("Axis1", "Axis2"), ("LocalXAxis", "LocalYAxis"), ("AxisX", "AxisY"))
+
+
+def _vec(o, name):
+    """A vector property of a PLAXIS object (an origin, an axis): an object with x, y, z, a tuple, or name + x / y / z."""
+    try:
+        v = _xyz(_v(getattr(o, name)), True)
+        if v and len(v) == 3:
+            return v
+    except Exception:  # noqa: BLE001
+        pass
+    comps = []
+    for c in "xyz":
+        val = None
+        for n in (name + c, name + c.upper(), f"{name}_{c}", f"{name}_{c.upper()}"):
+            try:
+                val = _num(getattr(o, n))
+            except Exception:  # noqa: BLE001
+                val = None
+            if val is not None:
+                break
+        comps.append(val)
+    return comps if all(c is not None for c in comps) else None
+
+
+def _frame(o):
+    """(origin, axis 1, axis 2) of a PLAXIS 3D surface, or None when this PLAXIS gives none."""
+    try:
+        names = [n for n in dir(o) if isinstance(n, str)]
+    except Exception:  # noqa: BLE001
+        names = []
+    origins = list(ORIGIN_NAMES) + [n for n in names if "origin" in n.lower() and n not in ORIGIN_NAMES]
+    pairs = list(AXIS_NAMES)
+    found = sorted(n for n in names if "axis" in n.lower() and n[-1:] in "12")
+    if len(found) >= 2:
+        pairs.append((found[0], found[1]))
+    org = next((v for v in (_vec(o, n) for n in origins) if v), None)
+    if org is None:
+        return None
+    for a, b in pairs:
+        a1, a2 = _vec(o, a), _vec(o, b)
+        if a1 and a2 and any(a1) and any(a2):
+            return org, a1, a2
+    return None
+
+
+def _unit(v):
+    n = math.sqrt(sum(c * c for c in v)) or 1.0
+    return [c / n for c in v]
+
+
+def _to_global(pts: list, frame) -> list[list]:
+    """The local points of a surface in model coordinates, in the two ways PLAXIS may order them (u, v, normal) or
+    (normal, u, v)."""
+    o, a1, a2 = frame
+    a1, a2 = _unit(a1), _unit(a2)
+    a3 = [a1[1] * a2[2] - a1[2] * a2[1], a1[2] * a2[0] - a1[0] * a2[2], a1[0] * a2[1] - a1[1] * a2[0]]
+    out = []
+    for order in ((0, 1, 2), (1, 2, 0)):
+        g = []
+        for q in pts:
+            q = (list(q) + [0.0, 0.0])[:3]
+            u, v, w = q[order[0]], q[order[1]], q[order[2]]
+            g.append([round(o[i] + u * a1[i] + v * a2[i] + w * a3[i], 6) for i in range(3)])
+        out.append(g)
+    return out
+
+
+def _surface_points(o, parent, is_3d: bool) -> list[list]:
+    """Every reading of an object's points in model coordinates (3D: through the surface's local frame too); the
+    first is the default, the right one is chosen once the whole model is read (_resolve_globals)."""
+    raw = _obj_points(parent, is_3d)
+    if not is_3d or len(raw) < 3:  # a line (anchor, beam) is given in model coordinates
+        return [raw]
+    cands = []
+    for src in (parent, o):
+        pts = raw if src is parent else (_obj_points(o, True) if o is not parent else [])
+        if not pts:
+            continue
+        fr = _frame(src)
+        if fr:
+            cands += _to_global(pts, fr)
+        cands.append(pts)
+    uniq = []
+    for c in cands:
+        if c and c not in uniq:
+            uniq.append(c)
+    return uniq or [raw]
+
+
+def _plane_hits(poly: list, ends: list, tol: float = 0.05) -> int:
+    """How many line ends (anchors, beams) lie on the surface (its plane and its box)."""
+    if len(poly) < 3:
+        return 0
+    p0 = poly[0]
+    n = None
+    for i in range(1, len(poly) - 1):
+        a = [poly[i][k] - p0[k] for k in range(3)]
+        b = [poly[i + 1][k] - p0[k] for k in range(3)]
+        c = [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]
+        if math.sqrt(sum(x * x for x in c)) > 1e-9:
+            n = _unit(c)
+            break
+    if n is None:
+        return 0
+    lo = [min(q[k] for q in poly) - tol for k in range(3)]
+    hi = [max(q[k] for q in poly) + tol for k in range(3)]
+    hits = 0
+    for e in ends:
+        if abs(sum((e[k] - p0[k]) * n[k] for k in range(3))) <= tol and all(lo[k] <= e[k] <= hi[k] for k in range(3)):
+            hits += 1
+    return hits
+
+
+def _resolve_globals(m: dict) -> None:
+    """N1: of the readings of each surface, the one that meets the anchors / beams and lies in the ground."""
+    ends = [list(map(float, (list(q) + [0.0])[:3])) for st in m["structures"] if len(st.get("points") or []) == 2
+            and not st.get("_alts") for q in st["points"]]
+    ends += [[p["x"], p["y"], p.get("z", 0.0)] for p in m["points"]]
+    top = max((lay["top"] for b in m["boreholes"] for lay in b.get("layers") or []), default=None)
+    flagged = []
+    for coll in ("structures", "interfaces", "loads", "contractions", "displacements"):
+        for it in m.get(coll) or []:
+            alts = it.pop("_alts", None)
+            if not alts:
+                continue
+
+            def score(c):
+                if top is None:
+                    return _plane_hits(c, ends)
+                if coll == "loads":  # a surface load lies on the ground
+                    return -abs(max(q[2] for q in c) - top)
+                return 2 * _plane_hits(c, ends) - sum(1 for q in c if q[2] > top + 0.5)
+            best = max(alts, key=lambda c: (score(c), -alts.index(c)))
+            it["points"] = best
+            if top is not None and coll in ("structures", "interfaces") and len(best) >= 3 and \
+                    (min(q[2] for q in best) + max(q[2] for q in best)) / 2 > top:  # its mid level above the ground
+                flagged.append(it["name"])
+    if flagged:
+        m["notes"].append("Read above the ground (their points may be in their surface's local coordinates): "
+                          + ", ".join(flagged[:8]) + ". The view may place them wrong; please tell the QA/QC.")
+
+
+def soil_contour(g_i):
+    """The model's soil contour (xmin, xmax, ymin, ymax) from PLAXIS, or None (QA V26.1.9 D7: the soil volume, not
+    the points and structures, says whether a result point is in the model)."""
+    try:
+        c = g_i.SoilContour
+    except Exception:  # noqa: BLE001
+        return None
+    vals = {}
+    for key in ("xmin", "xmax", "ymin", "ymax"):
+        for n in (key, key.capitalize(), key[0].upper() + key[1:3] + key[3:].capitalize(), key.upper()):
+            try:
+                v = _num(getattr(c, n))
+            except Exception:  # noqa: BLE001
+                v = None
+            if v is not None:
+                vals[key] = v
+                break
+    if len(vals) == 4 and vals["xmax"] > vals["xmin"] and vals["ymax"] > vals["ymin"]:
+        return vals
+    pts = _obj_points(c, True)
+    if len(pts) >= 3:
+        xs, ys = [q[0] for q in pts], [q[1] for q in pts]
+        if max(xs) > min(xs) and max(ys) > min(ys):
+            return {"xmin": min(xs), "xmax": max(xs), "ymin": min(ys), "ymax": max(ys)}
+    return None
+
+
 def _kind_of_material(m) -> str:
     t = (str(getattr(m, "_plx_type", "")) + " " + str(_v(getattr(m, "TypeName", "")) or "")).lower()
     for key, kind in (("soil", "soil"), ("plate", "plate"), ("embedded", "embedded_beam"), ("anchor", "anchor"),
@@ -386,8 +561,9 @@ def extract(s_i, g_i) -> dict:
                         ("Beams", "beam"), ("Cables", "cable")):  # V26.1.9: cables (PLAXIS 3D 2023.2+)
         for o in _list(g_i, group):
             parent = getattr(o, "Parent", o)
-            m["structures"].append({"kind": kind, "name": _name(o), "material": mat_of(o),
-                                    "points": _obj_points(parent, is_3d)})
+            alts = _surface_points(o, parent, is_3d)
+            m["structures"].append({"kind": kind, "name": _name(o), "material": mat_of(o), "points": alts[0],
+                                    **({"_alts": alts} if len(alts) > 1 or (is_3d and len(alts[0]) >= 3) else {})})
     # V26.1.9 (QA/QC missing features, P1): interfaces, tunnels, contractions, wells and drains
     for group, side in (("PositiveInterfaces", "positive"), ("NegativeInterfaces", "negative"), ("Interfaces", "")):
         for o in _list(g_i, group):
@@ -399,15 +575,17 @@ def extract(s_i, g_i) -> dict:
                 mode = str(_v(o.MaterialMode))
             except Exception:  # noqa: BLE001
                 pass
+            alts = _surface_points(o, parent, is_3d)
             m["interfaces"].append({"name": _name(o), "side": side, "mode": mode, "material": mat_of(o),
-                                    "points": _obj_points(parent, is_3d)})
+                                    "points": alts[0], **({"_alts": alts} if is_3d else {})})
     for o in _list(g_i, "Tunnels"):
         m["tunnels"].append({"name": _name(o)})
     for group in ("LineContractions", "SurfaceContractions", "Contractions"):
         for o in _list(g_i, group):
             parent = getattr(o, "Parent", o)
+            alts = _surface_points(o, parent, is_3d)
             m["contractions"].append({"name": _name(o), "value": _num(getattr(o, "Cref", None)),
-                                      "points": _obj_points(parent, is_3d)})
+                                      "points": alts[0], **({"_alts": alts} if is_3d else {})})
     for group, coll, props in (("Wells", "wells", WELL_PROPS), ("Drains", "drains", DRAIN_PROPS)):
         for o in _list(g_i, group):
             parent = getattr(o, "Parent", o)
@@ -418,7 +596,9 @@ def extract(s_i, g_i) -> dict:
         for o in _list(g_i, group):
             props = {k: val for k, val in _numeric_attrs(o).items() if re.fullmatch(r"(?i)u[xyz](_start|_end|_ref)?", k)}
             parent = getattr(o, "Parent", o)
-            m["displacements"].append({"name": _name(o), "kind": kind, "props": props, "points": _obj_points(parent, is_3d)})
+            alts = _surface_points(o, parent, is_3d)
+            m["displacements"].append({"name": _name(o), "kind": kind, "props": props, "points": alts[0],
+                                       **({"_alts": alts} if is_3d else {})})
     for group, kind in (("LineLoads", "line"), ("PointLoads", "point"), ("SurfaceLoads", "surface")):
         for o in _list(g_i, group):
             props = {}
@@ -427,9 +607,10 @@ def extract(s_i, g_i) -> dict:
                 if val is not None:
                     props[prop] = val
             parent = getattr(o, "Parent", o)
+            alts = _surface_points(o, parent, is_3d) if kind == "surface" else []
             m["loads"].append({"kind": kind, "name": _name(o), "props": props,
-                               "points": _obj_points(parent, is_3d) if kind != "point" else
-                               [q for q in [_xyz(parent, is_3d)] if q]})
+                               "points": alts[0] if alts else _obj_points(parent, is_3d) if kind != "point" else
+                               [q for q in [_xyz(parent, is_3d)] if q], **({"_alts": alts} if len(alts) > 1 else {})})
 
     # stratigraphy: boreholes and soil layer levels (Soil mode)
     try:
@@ -438,6 +619,10 @@ def extract(s_i, g_i) -> dict:
         pass
     holes = _list(g_i, "Boreholes")
     m["boreholes"] += read_boreholes(g_i, is_3d)
+    _resolve_globals(m)  # N1: after the boreholes (the ground level is known)
+    sc = soil_contour(g_i)
+    if sc:
+        m["contour"] = sc
     if not holes:
         notes.append("No boreholes found: the soil layers come from the soil polygons only.")
 
@@ -566,6 +751,11 @@ def finish(m: dict) -> dict:
     for poly in m["soil_polygons"]:
         for q in poly["points"]:
             xs.append(q[0]), ys.append(q[1])
+    sc = m.get("contour") or {}
+    if sc.get("xmax") is not None:  # re-QA N1 / D7: the soil contour bounds the model
+        xs += [sc["xmin"], sc["xmax"]]
+        if v == "3d":
+            ys += [sc["ymin"], sc["ymax"]]
     for b in m["boreholes"]:
         xs.append(b["x"])
         for lay in b["layers"]:
@@ -682,6 +872,7 @@ def demo(version: str = "2d") -> dict:
          "phases": phases, "water": water, "mesh": {"level": "Medium"}, "staged": staged,
          "interfaces": interfaces, "drains": drains, "wells": [], "tunnels": [], "contractions": [],
          "clusters": [] if is3 else [f"Soil_{i}_1" for i in range(1, 5)],
+         "contour": {"xmin": 0.0, "xmax": W, "ymin": 0.0, "ymax": L if is3 else 0.0},
          "notes": ["Example model: PLAXIS is not connected (simulated solver). Connect PLAXIS in Settings, or upload "
                    "model.json made by plaxis_model.py, to read your own project."]}
     return finish(m)
@@ -1597,14 +1788,22 @@ def p2_candidates(m: dict, add) -> None:
         if L0 < 1e-6:
             continue
         u = [(pb[k] - pa[k]) / L0 for k in range(3)]
-        refs = [f"{b}.{ax}+*{u[k]:.6g}~{L0:.6g}" for k, ax in enumerate("xyz") if ax in axes and abs(u[k]) > 1e-9]
+        # a grouted anchor: the grout body (geogrid / embedded beam) at the free end moves with it, its length kept
+        carried = [] if st["kind"] not in ("anchor", "cable") else \
+            [n for o in m["structures"] if o is not st and o["kind"] in ("geogrid", "embedded_beam")
+             for ends in [_point_names(m, o.get("points"))] if len(ends) == 2 and b in ends for n in ends if n != b]
+        refs = [f"{p}.{ax}+*{u[k]:.6g}~{L0:.6g}" for p in [b] + carried for k, ax in enumerate("xyz") if ax in axes and abs(u[k]) > 1e-9]
         add(f"len:{st['name']}", "structures", "Length of anchors, piles, bolts and cables",
-            f"{st['name']} length (free end {b} moves, {a} stays)", "; ".join(refs), "m", round(L0, 4))
+            f"{st['name']} {'free ' if carried else ''}length (end {b} moves{', with the grout body' if carried else ''}; {a} stays)",
+            "; ".join(refs), "m", round(L0, 4))
     # 2. slopes and embankments: the angle and the height of an inclined line (its toe stays)
+    on_struct = [set(_point_names(m, st.get("points"))) for st in m["structures"]]
     for ln in m.get("lines") or []:
         a, b = pts.get(ln.get("a")), pts.get(ln.get("b"))
         if not a or not b:
             continue
+        if any({ln["a"], ln["b"]} <= sp for sp in on_struct if len(sp) >= 2):
+            continue  # an anchor / strut / geogrid line is not a slope (its length is its own input)
         pa, pb = xyz(a), xyz(b)
         dh = math.hypot(pb[0] - pa[0], pb[1] - pa[1]) if v == "3d" else abs(pb[0] - pa[0])
         dv = pb[vi] - pa[vi]

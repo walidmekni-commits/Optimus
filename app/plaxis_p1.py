@@ -265,38 +265,43 @@ class P1Mixin:
     def _adjacent_soil(self, g_i, itf):
         """The soil material next to an interface, read in PLAXIS: the borehole layer at the mid level of the
         interface (or of its plate). Returns (material, its name) or (None, "")."""
-        from .plaxis_model import _obj_points, read_boreholes
-        is3 = False
-        pts = []
+        from .plaxis_model import _obj_points, _surface_points, read_boreholes
+        is3, readings = False, []
         for o in (getattr(itf, "Parent", None), itf):
             if o is None:
                 continue
             for flag in (True, False):
                 try:
                     pts = _obj_points(o, flag)
-                    is3 = flag and any(len(q) > 2 for q in pts)
                 except Exception:  # noqa: BLE001
                     pts = []
                 if pts:
+                    is3 = flag and any(len(q) > 2 for q in pts)
+                    try:  # re-QA N1: a 3D surface's points are local to it; its readings in model coordinates first
+                        readings += [c for c in _surface_points(itf, o, True) if c] if is3 else []
+                    except Exception:  # noqa: BLE001
+                        pass
+                    readings.append(pts)
                     break
-            if pts:
+            if readings:
                 break
-        if not pts:
+        if not readings:
             return None, ""
         vi = 2 if is3 else 1
-        lv = [float(q[vi]) for q in pts if len(q) > vi]
-        mid = (min(lv) + max(lv)) / 2 if lv else 0.0
         _try(g_i, "gotosoil")
         try:
             holes = read_boreholes(g_i, is3)
         except Exception:  # noqa: BLE001
             holes = []
-        for lay in (holes[0]["layers"] if holes else []):
-            if lay["bottom"] - 1e-9 <= mid <= lay["top"] + 1e-9 and lay.get("material"):
-                try:
-                    return self._find(g_i, lay["material"]), lay["material"]
-                except Exception:  # noqa: BLE001
-                    return None, ""
+        for pts in readings:
+            lv = [float(q[vi]) for q in pts if len(q) > vi]
+            mid = (min(lv) + max(lv)) / 2 if lv else 0.0
+            for lay in (holes[0]["layers"] if holes else []):
+                if lay["bottom"] - 1e-9 <= mid <= lay["top"] + 1e-9 and lay.get("material"):
+                    try:
+                        return self._find(g_i, lay["material"]), lay["material"]
+                    except Exception:  # noqa: BLE001
+                        return None, ""
         return None, ""
 
     def _interfaces(self, g_i, edits: dict) -> list[str]:
@@ -323,7 +328,9 @@ class P1Mixin:
             if src is None:  # QA V26.1.9 D4: 'from adjacent soil': the soil layer at the interface's mid level
                 src, base = self._adjacent_soil(g_i, itf)
             if src is None:
-                raise SolverError(f"{name}: no material to copy for its own interface properties (custom material or adjacent soil)")
+                raise SolverError(f"{name}: no material to copy for its own interface properties: it takes its properties "
+                                  "from the adjacent soil, and no soil layer of the first borehole was found at its level. "
+                                  "Read the model again (Read from PLAXIS) so that its place is read in model coordinates.")
             _try(g_i, "gotosoil")
             new = None
             try:
@@ -596,12 +603,25 @@ class P1Mixin:
                 errors.append(f"{cmd}: {e}")
         if mult is None:
             raise SolverError("PLAXIS did not create a dynamic multiplier (needs PLAXIS with Dynamics): " + "; ".join(errors[:2]))
-        for prop, val in (("Signal", "Harmonic"), ("Amplitude", 1.0), ("Frequency", freq), ("InitialPhaseAngle", 0.0)):
-            try:
-                _set(g_i, mult, prop, val)
-            except Exception as e:  # noqa: BLE001
-                if prop in ("Signal", "Frequency"):
-                    raise SolverError(f"The dynamic multiplier did not take {prop} = {val}: {e}")
+        rec = d.get("record") or [] if d.get("signal") == "record" else []
+        if rec:  # V26.1.9 (P2): an earthquake record: a table of accelerations, scaled (g → m/s²)
+            amp = float(d.get("scale") if d.get("scale") is not None else 1.0) * (9.81 if d.get("units") == "g" else 1.0)
+            if not d.get("duration"):
+                dur = float(rec[-1][0])
+            for prop, val in (("Signal", "Table"), ("DataType", "Accelerations"), ("DriftCorrection", True)):
+                try:
+                    _set(g_i, mult, prop, val)
+                except Exception as e:  # noqa: BLE001
+                    if prop != "DriftCorrection":
+                        raise SolverError(f"The dynamic multiplier did not take {prop} = {val}: {e}")
+            self._fill_table(g_i, mult, rec)
+        else:
+            for prop, val in (("Signal", "Harmonic"), ("Amplitude", 1.0), ("Frequency", freq), ("InitialPhaseAngle", 0.0)):
+                try:
+                    _set(g_i, mult, prop, val)
+                except Exception as e:  # noqa: BLE001
+                    if prop in ("Signal", "Frequency"):
+                        raise SolverError(f"The dynamic multiplier did not take {prop} = {val}: {e}")
         dyn_objs, axis = [], "x"
         if base_shaking:
             ext = self._extent(g_i, is3)
@@ -711,6 +731,43 @@ class P1Mixin:
                 break
         return [f"Dynamic phase {_name(ph)} after {d['after']}: harmonic {freq:g} Hz, amplitude {amp:g}, "
                 f"{dur:g} s on {', '.join(dyn_objs)}; {nvis} viscous boundar{'y' if nvis == 1 else 'ies'}"]
+
+    def _fill_table(self, g_i, mult, rows: list) -> None:
+        """The rows (time, value) of a table multiplier: rows added to its table, then time and value set (the
+        spellings of the PLAXIS 2D / 3D command references; to confirm on PLAXIS, QA/QC)."""
+        from .solvers import SolverError
+        table = getattr(mult, "Table", None)
+        if table is None:  # (an empty table is falsy: it is still the table)
+            table = getattr(mult, "table", None)
+        if table is None:
+            raise SolverError("The dynamic multiplier has no table for the earthquake record in this PLAXIS.")
+        errors = []
+        for i, (t, a) in enumerate(rows):
+            row = None
+            for how in (lambda: table.add(), lambda: table.addrow(), lambda: g_i.addrow(table), lambda: table.insert(i)):
+                try:
+                    row = how()
+                    break
+                except Exception as e:  # noqa: BLE001
+                    errors.append(str(e))
+            if isinstance(row, (list, tuple)):
+                row = row[-1]
+            if row is None or not hasattr(row, "__dict__") and not hasattr(row, "Time"):
+                try:
+                    row = table[i]
+                except Exception as e:  # noqa: BLE001
+                    raise SolverError("PLAXIS did not take the rows of the earthquake record: " + "; ".join(dict.fromkeys(errors + [str(e)]))[:300])
+            ok = 0
+            for props, val in ((("Time", "time"), float(t)), (("Multiplier", "Value", "Signal"), float(a))):
+                for prop in props:
+                    try:
+                        _set(g_i, row, prop, val)
+                        ok += 1
+                        break
+                    except Exception as e:  # noqa: BLE001
+                        errors.append(str(e))
+            if ok < 2:
+                raise SolverError(f"Row {i + 1} of the earthquake record was not taken by PLAXIS: " + "; ".join(dict.fromkeys(errors))[-300:])
 
     # --- results ----------------------------------------------------------------------------------------------
     @staticmethod

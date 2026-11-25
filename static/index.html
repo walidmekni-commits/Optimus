@@ -401,6 +401,9 @@
   .tblWrap { max-height:22rem; overflow:auto; border:1px solid var(--line); border-radius:.5rem; }
   #resCard .tblWrap { max-height:34rem; }
   .tblWrap th { position:sticky; top:0; background:var(--card); }
+  /* re-QA N4: the every-run table fits the screen: long names wrap in the header (as the comparison table) */
+  table.wrapT th { white-space:normal; text-transform:none; letter-spacing:0; vertical-align:bottom; min-width:4.5rem; max-width:9rem; overflow-wrap:anywhere; }
+  table.wrapT td.wr { min-width:12rem; max-width:22rem; white-space:normal; }
   .runbar { display:flex; gap:.8rem; align-items:center; flex-wrap:wrap; margin-top:.8rem; }
   .banner { border-radius:.7rem; padding:.8rem 1rem; display:flex; gap:1rem; align-items:center; flex-wrap:wrap; margin-bottom:.8rem; }
   .banner.good { background:var(--okbg); color:var(--ok); } .banner.part { background:var(--soft2); color:var(--warn); } .banner.info { background:var(--soft); color:var(--ink); }
@@ -1799,7 +1802,7 @@ function modelChecks() {
     const vals = Object.values(ld.props || {}).filter(v => typeof v === 'number');
     if (!vals.length) out.push(`${ld.name}: no load value was read.`);
     else if (vals.every(v => v === 0)) out.push(`${ld.name}: every load value is 0.`);
-    if (staged.length && !staged.some(x => x.object === ld.name)) out.push(`${ld.name}: not active in any stage.`);
+    if (staged.length && !staged.some(x => x.object === ld.name || String(x.object || '').startsWith(ld.name + '_'))) out.push(`${ld.name}: not active in any stage.`);
   });
   (m.structures || []).forEach(st => { if (!st.material) out.push(`${st.name} (${st.kind}): no material assigned.`);
     else if (!mats.has(st.material)) out.push(`${st.name}: its material ${st.material} was not read.`); });
@@ -2073,13 +2076,19 @@ function renderFeat() {
         ${is3 && a.kind === 'plate' ? `<label>width along y <input type="number" step="any" class="faW" value="${esc(a.width ?? '')}"> m</label>` : ''}
         ${a.kind === 'anchor' ? `<label>prestress <input type="number" step="any" class="faPre" value="${esc(a.prestress ?? '')}"> kN</label>` : ''}</div></div>`).join('')}
     <button class="small faAdd">＋ Add a new structure</button>
-    <h4>Dynamic load</h4><label><input type="checkbox" id="fdOn"${S.dynamic.on ? ' checked' : ''}> Add a dynamic phase (harmonic; needs PLAXIS with the Dynamics module)</label>
+    <h4>Dynamic load</h4><label><input type="checkbox" id="fdOn"${S.dynamic.on ? ' checked' : ''}> Add a dynamic phase (harmonic or an earthquake record; needs PLAXIS with the Dynamics module)</label>
     <div class="chips2${S.dynamic.on ? '' : ' hidden'}" id="fdBox"><label>after <select id="fdAfter">${phOpts(S.dynamic.after)}</select></label>
       <label>on <select id="fdSrc"><option value="base">the model base (shaking)</option>${(CAT.loads || []).map(l => `<option value="${esc(l)}"${l === S.dynamic.source ? ' selected' : ''}>${esc(l)}</option>`).join('')}</select></label>
-      <label>amplitude <input type="number" step="any" id="fdAmp" value="${esc(S.dynamic.amplitude)}"> <span class="meta">${S.dynamic.source === 'base' ? 'm' : 'load unit'}</span></label>
-      <label>frequency <input type="number" step="any" id="fdFreq" value="${esc(S.dynamic.frequency)}"> Hz</label>
+      <label>signal <select id="fdSig"><option value="harmonic">harmonic</option><option value="record"${S.dynamic.signal === 'record' ? ' selected' : ''}>earthquake record (time, acceleration)</option></select></label>
+      ${S.dynamic.signal === 'record' ? `<label>name <input id="fdName" value="${esc(S.dynamic.name || '')}" placeholder="e.g. El Centro NS"></label>
+      <label>acceleration in <select id="fdUnits"><option value="m/s2">m/s²</option><option value="g"${S.dynamic.units === 'g' ? ' selected' : ''}>g</option></select></label>
+      <label>scale × <input type="number" step="any" id="fdScale" value="${esc(S.dynamic.scale ?? 1)}"></label>
+      <label style="flex-basis:100%">record: one line per time step, "time acceleration" (paste from Excel or a text file)<br><textarea id="fdRec" rows="5" style="width:100%;font-family:monospace">${esc((S.dynamic.record || []).map(r => Array.isArray(r) ? r.join('\t') : r).join('\n'))}</textarea></label>
+      <span class="meta" id="fdRecInfo">${(() => { const r = (S.dynamic.record || []).filter(Array.isArray); return r.length ? `${r.length} points, ${r[r.length - 1][0]} s, peak ${Math.max(...r.map(x => Math.abs(x[1])))} ${S.dynamic.units === 'g' ? 'g' : 'm/s²'}` : 'no record yet'; })()}</span>`
+      : `<label>amplitude <input type="number" step="any" id="fdAmp" value="${esc(S.dynamic.amplitude)}"> <span class="meta">${S.dynamic.source === 'base' ? 'm' : 'load unit'}</span></label>
+      <label>frequency <input type="number" step="any" id="fdFreq" value="${esc(S.dynamic.frequency)}"> Hz</label>`}
       <label>duration <input type="number" step="any" id="fdDur" value="${esc(S.dynamic.duration)}"> s</label>
-      <span class="fNote">The amplitude, frequency and duration are variables (section 2, Stages › Dynamic load); ax, vx and ux of the dynamic phase are results.</span></div>
+      <span class="fNote">${S.dynamic.signal === 'record' ? 'The scale factor and the duration' : 'The amplitude, frequency and duration'} are variables (section 2, PLAXIS features › Dynamic load); ax, vx and ux of the dynamic phase are results.</span></div>
     ${(CAT.has && (CAT.has.tunnels || CAT.has.contractions)) || S.tunnel.d ? `<h4>Tunnel</h4><label>Tunnel diameter D <input type="number" step="any" id="ftD" value="${esc(S.tunnel.d ?? '')}"> m</label> <span class="fNote">gives the volume loss VL = Vs / (π D² / 4) as a result</span>` : ''}`;
   const ch = () => { renderFeat(); saveFeat(); };
   $$('#featBody .fSafe').forEach(x => x.onchange = () => { S.safety.after = $$('#featBody .fSafe').filter(y => y.checked).map(y => y.value); ch(); });
@@ -2100,8 +2109,13 @@ function renderFeat() {
   $('#featBody .faAdd').onclick = () => { const ids = S.added.map(a => a.id); let k = S.added.length + 1; while (ids.includes('N' + k)) k++;
     S.added.push({id: 'N' + k, kind: 'anchor', a: {}, b: {}, material: '', phase: (phs[0] || {}).name || '', prestress: null}); ch(); };
   $('#fdOn').onchange = () => { S.dynamic.on = $('#fdOn').checked; if (S.dynamic.on && !S.dynamic.after) S.dynamic.after = (phs[phs.length - 1] || {}).name || ''; ch(); };
-  [['#fdAfter', 'after', String], ['#fdSrc', 'source', String], ['#fdAmp', 'amplitude', Number], ['#fdFreq', 'frequency', Number], ['#fdDur', 'duration', Number]]
-    .forEach(([id, k, f]) => { const x = $(id); if (x) x.onchange = () => { S.dynamic[k] = f(x.value); if (k === 'source') renderFeat(); saveFeat(); }; });
+  [['#fdAfter', 'after', String], ['#fdSrc', 'source', String], ['#fdAmp', 'amplitude', Number], ['#fdFreq', 'frequency', Number], ['#fdDur', 'duration', Number],
+   ['#fdSig', 'signal', String], ['#fdName', 'name', String], ['#fdUnits', 'units', String], ['#fdScale', 'scale', Number]]
+    .forEach(([id, k, f]) => { const x = $(id); if (x) x.onchange = () => { S.dynamic[k] = f(x.value); if (k === 'source' || k === 'signal' || k === 'units') renderFeat(); saveFeat(); }; });
+  const rec = $('#fdRec'); if (rec) rec.onchange = () => {  // V26.1.9 (P2): the record, read as (time, acceleration) pairs
+    const rows = []; rec.value.split(/\r?\n/).forEach(ln => { const n = (ln.includes(';') ? ln.replace(/,/g, '.').split(';') : ln.split(/[\s,]+/)).map(x => parseFloat(x)).filter(x => !isNaN(x));
+      if (n.length >= 2 && (!rows.length || n[0] > rows[rows.length - 1][0])) rows.push([n[0], n[1]]); });
+    S.dynamic.record = rows; if (rows.length) S.dynamic.duration = rows[rows.length - 1][0]; renderFeat(); saveFeat(); };
   const td = $('#ftD'); if (td) td.onchange = () => { S.tunnel.d = td.value === '' ? null : +td.value; saveFeat(); };
 }
 async function saveFeat() {  // the features add inputs (section 2) and results (section 1): the catalog is read again
@@ -2685,10 +2699,10 @@ function renderReport() {
     + (qa.geo.length ? `<p><b>Geometry checks of the runs before PLAXIS</b></p><ul>${qa.geo.map(x => `<li>${esc(x)}</li>`).join('')}</ul>` : '')
     + (qa.failed.length ? `<p><b>Failed runs</b></p>` + tcap('Failed runs: the reason given by PLAXIS and the proposed solution.') + `<table><thead><tr><th>Run</th><th>Parameter values</th><th>Failure reason</th><th>Proposed solution</th></tr></thead><tbody>${qa.failed.map(f => `<tr><td class="no">Run ${esc(f[0])}</td><td>${esc(f[1])}</td><td>${esc(f[2])}</td><td>${esc(f[3])}</td></tr>`).join('')}</tbody></table>` : '');
   h += repCompare(r, ts) + '<!--RUNS-->';
-  h += `<h3>4. Every run: inputs and results</h3><div class="tblWrap"><table><thead><tr><th>Run</th>${vs.map(v => `<th class="n">${esc(v.label + unitTxt(v.unit))}</th>`).join('')}${ts.map(t => `<th class="n">${esc(t.label + unitTxt(t.unit))}</th>`).join('')}${r.mode === 'calibration' ? '<th class="n">Misfit %</th>' : ''}${r.optimization ? '<th class="n">Achieved %</th>' : ''}<th>Status</th>${r.rows.some(x => x.status === 'failed') ? '<th>Failure reason</th><th>Proposed solution</th>' : ''}</tr></thead><tbody>${r.rows.map(x =>
+  h += `<h3>4. Every run: inputs and results</h3><div class="tblWrap"><table class="wrapT"><thead><tr><th>Run</th>${vs.map(v => `<th class="n">${esc(v.label + unitTxt(v.unit))}</th>`).join('')}${ts.map(t => `<th class="n">${esc(t.label + unitTxt(t.unit))}</th>`).join('')}${r.mode === 'calibration' ? '<th class="n">Misfit %</th>' : ''}${r.optimization ? '<th class="n">Achieved %</th>' : ''}<th>Status</th>${r.rows.some(x => x.status === 'failed') ? '<th>Failure reason</th><th>Proposed solution</th>' : ''}</tr></thead><tbody>${r.rows.map(x =>
     `<tr class="${x.run === repBest && !running ? 'best' : ''}"><td class="no">Run ${x.run}${x.run === repBest && !running ? ' ★' : ''}</td>${vs.map(v => `<td class="n">${cell(v, (x.inputs || {})[v.name])}</td>`).join('')}${ts.map(t => { const o = (x.outputs || {})[t.name];
       const pass = t.operator && t.operator !== 'report' && typeof o === 'number' ? ({'>=': o >= t.value, '>': o > t.value, '<=': o <= t.value, '<': o < t.value})[t.operator] : null;
-      return `<td class="n">${typeof o === 'number' ? fmtNum(o) + (pass == null ? '' : pass ? ' ✓' : ' ✗') : '<span class="meta">—</span>'}</td>`; }).join('')}${r.mode === 'calibration' ? `<td class="n">${x.misfit != null ? fmtNum(x.misfit) : '—'}</td>` : ''}${r.optimization ? `<td class="n">${x.achievement != null ? fmtNum(x.achievement) : '—'}</td>` : ''}<td>${esc(x.status === 'succeeded' ? 'calculated' : ['queued', 'pending'].includes(x.status) ? 'awaiting' : x.status)}</td>${r.rows.some(y => y.status === 'failed') ? `<td>${esc(x.status === 'failed' ? x.reason || x.error || '' : '')}</td><td>${esc(x.status === 'failed' ? x.solution || '' : '')}</td>` : ''}</tr>`).join('')}</tbody></table></div>`;
+      return `<td class="n">${typeof o === 'number' ? fmtNum(o) + (pass == null ? '' : pass ? ' ✓' : ' ✗') : '<span class="meta">—</span>'}</td>`; }).join('')}${r.mode === 'calibration' ? `<td class="n">${x.misfit != null ? fmtNum(x.misfit) : '—'}</td>` : ''}${r.optimization ? `<td class="n">${x.achievement != null ? fmtNum(x.achievement) : '—'}</td>` : ''}<td>${esc(x.status === 'succeeded' ? 'calculated' : ['queued', 'pending'].includes(x.status) ? 'awaiting' : x.status)}</td>${r.rows.some(y => y.status === 'failed') ? `<td class="wr">${esc(x.status === 'failed' ? x.reason || x.error || '' : '')}</td><td class="wr">${esc(x.status === 'failed' ? x.solution || '' : '')}</td>` : ''}</tr>`).join('')}</tbody></table></div>`;
   h += '<!--/RUNS-->';
   (r.summary || []).forEach(sm => { h += `<h3>Sensitivity summary: ${esc(sm.label + unitTxt(sm.unit))}</h3><table><thead><tr><th>#</th><th>Parameter</th><th class="n">Largest decrease</th><th class="n">Largest increase</th><th class="n">Spread</th></tr></thead><tbody>${sm.params.map((q, i) =>
     `<tr><td>${i + 1}</td><td>${esc(q.label)}</td><td class="n">${q.lo < 0 ? fmtNum(+q.lo.toFixed(1)) + ' % <span class="meta">(' + esc(q.lo_x) + ', Run ' + q.lo_run + ')</span>' : '—'}</td><td class="n">${q.hi > 0 ? '+' + fmtNum(+q.hi.toFixed(1)) + ' % <span class="meta">(' + esc(q.hi_x) + ', Run ' + q.hi_run + ')</span>' : '—'}</td><td class="n"><b>${fmtNum(+q.span.toFixed(1))} %</b></td></tr>`).join('')}</tbody></table>`; });

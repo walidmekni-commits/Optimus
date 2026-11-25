@@ -109,7 +109,7 @@ def test_failures_retry_then_email_then_retry_button(client, monkeypatch):
     def flaky(self, *a, **k):
         calls["n"] += 1
         if calls["n"] <= 5:  # run 1: 4 attempts fail; run 2: attempt 1 fails, attempt 2 passes
-            raise solvers.SolverError("did not converge")
+            raise solvers.SolverError("PLAXIS did not answer (connection lost)")
         return real(self, *a, **k)
 
     monkeypatch.setattr(solvers.SimulatedSolver, "run", flaky)
