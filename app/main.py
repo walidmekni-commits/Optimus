@@ -902,6 +902,12 @@ def _model_payload(p: dict, labels: int = 1, view: str = "iso") -> dict:
 
 def _save_model(pid: str, m: dict) -> dict:
     p = _project_or_404(pid)
+    old = (p.get("setup") or {}).get("plaxis_model") or {}
+    c = m.get("counts") or {}
+    if old.get("points") and not (c.get("points") or c.get("structures") or c.get("materials")):
+        # QA V26.1.9 C1: an empty read never replaces the project's model
+        raise HTTPException(409, "PLAXIS gave an empty model: the project's model was kept. Check that the project is "
+                                 "open in PLAXIS Input and connect again.")
     chosen = _version(p)
     if m["version"] != chosen:
         m["notes"] = [f"PLAXIS says this is a PLAXIS {m['version'].upper()} project; the app was set to PLAXIS "

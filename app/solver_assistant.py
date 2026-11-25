@@ -22,6 +22,11 @@ def diagnose(full: bool = True) -> dict:
     except ImportError as e:
         d["plxscripting"], d["plxscripting_error"] = None, str(e)
     d["port_answers"] = L._listening(d["host"], d["port"])
+    if d["port_answers"] and d.get("plxscripting"):  # QA V26.1.9 C1: the password itself, by a harmless command
+        try:
+            d["password_ok"] = bool(L._try(d["host"], d["port"], [cfg.get("password") or ""], "3d"))
+        except Exception:  # noqa: BLE001
+            d["password_ok"] = False
     d["open"] = L.running_inputs()
     for p in d["open"]:
         p["ports"] = L.listening_ports([p["pid"]])
@@ -57,8 +62,10 @@ def diagnosis_text(d: dict) -> str:
                             ", scripting server not listening"))
     else:
         lines.append("· No PLAXIS Input is open (the app starts it when it connects)")
-    lines.append(f"{ok if d['port_answers'] else '·'} Saved port {d['host']}:{d['port']} "
-                 f"{'answers' if d['port_answers'] else 'does not answer'}; password {'saved' if d['password_set'] else 'not set yet'}")
+    pw_txt = ("accepted by PLAXIS" if d.get("password_ok") else "NOT accepted by PLAXIS (Automatic connection reads the "
+              "right one from PLAXIS)") if "password_ok" in d else ("saved" if d["password_set"] else "not set yet")
+    lines.append(f"{ok if d['port_answers'] and d.get('password_ok', True) else bad if d['port_answers'] else '·'} Saved port "
+                 f"{d['host']}:{d['port']} {'answers' if d['port_answers'] else 'does not answer'}; password {pw_txt}")
     if d.get("plaxis_saved") and (d["plaxis_saved"]["ports"] or d["plaxis_saved"]["passwords"]):
         lines.append(f"{ok} Found in PLAXIS' own settings: ports {d['plaxis_saved']['ports'] or '-'}, "
                      f"{d['plaxis_saved']['passwords']} password(s) the app will try")

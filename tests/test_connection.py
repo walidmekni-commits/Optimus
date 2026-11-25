@@ -281,3 +281,43 @@ def test_browser_window_titled_plaxis_is_not_taken_for_plaxis(monkeypatch):
         {"pid": 6, "title": "PLAXIS 3D Advanced: Zayed_SS2.p3d"}]})
     monkeypatch.setattr(L, "image_name", lambda pid: {5: "msedge.exe", 6: "Plaxis3DInput.exe"}[pid])
     assert [p["pid"] for p in L.running_inputs()] == [6]
+
+
+def test_wrong_password_is_found_and_the_open_plaxis_is_used(pc, client, monkeypatch):
+    """QA V26.1.9 C1: PLAXIS answers on its port whatever the password, but every command then fails to decrypt.
+    OPTIMUS must not say 'connected', must not start a second (empty) PLAXIS, and reads the password in PLAXIS."""
+    class G:
+        def __init__(self, good):
+            self.good = good
+
+        @property
+        def Phases(self):
+            if not self.good:
+                raise RuntimeError("Failed to decrypt the response from the server")
+            return ["InitialPhase"]
+
+    def new_server(h, p, pw):
+        if p in pc["listen"]:
+            return ("s", G(pw == pc["accept"]))
+        raise ConnectionError("nothing there")
+    monkeypatch.setattr(L, "_new_server", new_server)
+    monkeypatch.setattr(L.subprocess, "Popen", lambda *a, **k: pytest.fail("no second PLAXIS while one is open"))
+    client.put("/api/solver/mode", json={"mode": "manual", "port": 10203, "password": "wrong"})
+    pc["listen"], pc["accept"] = {10203}, "RealPw-1"
+    pc["open"], pc["ports"] = [{"pid": 7, "name": "Plaxis3DInput.exe", "title": "PLAXIS 3D: UA-22"}], {7: [10203]}
+    menu = []
+    monkeypatch.setattr(L, "gui_start_server", lambda pid, progress=None, want_port=0: menu.append(pid) or
+                        {"ok": True, "port": 10203, "password": "RealPw-1"})
+    s_i, g_i = L.connect("3d")
+    assert g_i.good and menu == [7] and settings.load()["password"] == "RealPw-1"
+
+
+def test_an_empty_read_never_replaces_the_model(client):
+    from app import main
+    from tests.test_workflow import new_project
+    pid = new_project(client, "reporting")
+    assert client.post(f"/api/projects/{pid}/plaxis-model/read?demo=1").status_code == 200
+    empty = {"version": "3d", "source": "plaxis", "counts": {"points": 0, "structures": 0, "materials": 0}, "notes": []}
+    with pytest.raises(main.HTTPException):
+        main._save_model(pid, empty)
+    assert client.get(f"/api/projects/{pid}/plaxis-model").json()["model"]["points"]

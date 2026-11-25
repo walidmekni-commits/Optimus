@@ -306,12 +306,35 @@ def _new_server(host, port, password):
     return new_server(host, port, **kw)
 
 
-def _ok(s_i, version):
-    """A light call that fails when the password is wrong."""
+# QA V26.1.9 C1: PLAXIS answers on its port whatever the password; with a wrong one every command comes back
+# undecipherable ('failed to decrypt'), and a read gave an empty model. A harmless command proves the password.
+WRONG_PW = re.compile(r"(?i)decrypt|encrypt|password|authenticat|unauthori[sz]|forbidden|padding|mac check|invalid token|"
+                      r"expecting value|json|decode")
+
+
+class WrongPassword(Exception):
+    pass
+
+
+def _ok(s_i, version, g_i=None):
+    """A harmless command that fails when the password is wrong (a PLAXIS with no project open still passes)."""
     try:
         _ = s_i.is_3d
     except AttributeError:
         pass
+    except Exception as e:  # noqa: BLE001
+        if WRONG_PW.search(f"{type(e).__name__}: {e}"):
+            raise WrongPassword(f"PLAXIS did not accept the password ({e})") from e
+    if g_i is None:
+        return
+    for probe in (lambda: list(g_i.Phases), lambda: g_i.Project.Title.value, lambda: list(g_i.Points)):
+        try:
+            probe()
+            return
+        except Exception as e:  # noqa: BLE001
+            if WRONG_PW.search(f"{type(e).__name__}: {e}"):
+                raise WrongPassword(f"PLAXIS did not accept the password ({e})") from e
+            continue  # e.g. no project open yet: the password itself was accepted
 
 
 def _try(host, port, passwords, version):
@@ -319,7 +342,7 @@ def _try(host, port, passwords, version):
     for pw in dict.fromkeys(p for p in passwords if p is not None):
         try:
             s_i, g_i = _new_server(host, port, pw)
-            _ok(s_i, version)
+            _ok(s_i, version, g_i)
             return s_i, g_i, pw
         except Exception as e:  # noqa: BLE001
             LAST["error"] = f"{type(e).__name__}: {e}"
@@ -441,7 +464,10 @@ def connect(version: str = "3d", progress=lambda msg: None, should_stop=lambda: 
                     _remember_exe(proc["pid"])
                     return _connected(r[0], r[1], "localhost", pt, r[2], f"connected to open PLAXIS on port {pt}")
     stop_check()
-    others = [p for p in open_now if p["pid"] != launched]
+    # QA V26.1.9 C1: a PLAXIS that is open but refuses the password is never replaced by a second, empty PLAXIS:
+    # its server's port and password are read in its own window (also the one OPTIMUS started itself)
+    others = [p for p in open_now if p["pid"] != launched] or \
+             ([p for p in open_now if p["pid"] == launched] if _listening("localhost", port) else [])
     if others:
         proc = others[0]
         _step(f"{proc['name']} open ({proc['title'] or 'no title'}) without a usable scripting server")

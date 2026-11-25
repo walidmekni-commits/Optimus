@@ -379,7 +379,14 @@ class PlaxisSolver(P1Mixin, P2Mixin):
             progress(f"Opening {path.name} in PLAXIS…")
             s_i.open(str(Path(path).resolve()))
         progress("Reading points, lines, soils, structures, loads, materials and phases…")
-        return extract(s_i, g_i)
+        m = extract(s_i, g_i)
+        c = m.get("counts") or {}
+        if not (c.get("points") or c.get("structures") or c.get("materials") or c.get("boreholes")):
+            # QA V26.1.9 C1: an empty read (wrong password, no project open) is an error, never a model
+            raise SolverError("PLAXIS answered but gave no points, structures or materials: either no project is open "
+                              "in PLAXIS Input or PLAXIS did not accept the password. Open the project in PLAXIS and "
+                              "press Connect (Automatic connection reads the password from PLAXIS itself).")
+        return m
 
     def _connect(self, version: str = "3d"):
         """Connects to PLAXIS Input, starting it with its scripting server when it is not running."""
