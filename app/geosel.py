@@ -181,6 +181,15 @@ def displace(m: dict, variables: list[dict], inputs: dict) -> dict[str, list[flo
             one = one.strip()
             if not one or "@" in one:
                 continue
+            if one.endswith(".slopeangle") and "|" in one:  # V26.1.9 (P2): the top moves, toe and height stay
+                top, _, toe = one[:-len(".slopeangle")].partition("|")
+                if top in pts and toe in pts and 1 <= val <= 89:
+                    import math
+                    up = "z" if m.get("version") == "3d" else "y"
+                    q = new.setdefault(top, {k: float(pts[top].get(k, 0.0)) for k in "xyz"})
+                    xo, h = float(pts[toe].get("x", 0.0)), q[up] - float(pts[toe].get(up, 0.0))
+                    q["x"] = xo + (1.0 if q["x"] >= xo else -1.0) * abs(h) / math.tan(math.radians(val))
+                continue
             sm = REF.match(one)
             if sm:
                 name, ax = sm.group(1), sm.group(2)

@@ -18,6 +18,7 @@ from pydantic import BaseModel
 
 from . import compiled, design, geosel, ai, db, engine, exports, geometry, insight, plaxis_model, report, sequence, settings, study
 from . import accounts, project_files, units
+from . import plan as study_plan
 from .config import backend_name, data_dir, max_runs, runs_dir
 from .planner import build_runs, describe_plan, show, validate
 from .offline_ai import guess_section
@@ -1230,7 +1231,9 @@ def basic_run(pid: str):
 
 def _basic_plan(p: dict, example: bool, targets: list[dict] | None = None) -> dict:
     m = (p["setup"] or {}).get("plaxis_model") or {}
-    outs = [o for o in plaxis_model.outputs(p["setup"].get("plaxis") or "2d") if o["key"] != "file"]
+    # V26.1.9: the full run reads the main results of V26.1.8 only; the results added for the missing features
+    # (interfaces, flow, trough, beams) are chosen in the studies, so the full run of a 3D model stays as long as before
+    outs = [o for o in plaxis_model.outputs(p["setup"].get("plaxis") or "2d") if o["key"] != "file" and o["key"] in plaxis_model.BASIC_KEYS]
     targets = targets or ([{"name": f"T{i}", "label": o["label"], "result": o["result"], "phase": study._phase_for(o, m),
                             "operator": "report", "value": None, "unit": o["unit"], "key": o["key"]} for i, o in enumerate(outs, 1)]
                           + _stage_targets(outs, m))
@@ -1245,7 +1248,7 @@ def _stage_targets(outs: list[dict], m: dict) -> list[dict]:
     safety in the safety phases, the other results in the other phases (not the initial phase)."""
     out, i = [], 0
     for ph in (m.get("phases") or [])[1:]:
-        safe = "safety" in f"{ph.get('type', '')} {ph.get('id', '')}".lower()
+        safe = plaxis_model.is_safety_phase(ph)
         for o in outs:
             if (o["key"] == "fos") != safe:
                 continue
@@ -1260,7 +1263,7 @@ def _stage_targets(outs: list[dict], m: dict) -> list[dict]:
 def _stages_view(t: dict, outs: dict, setup: dict, m: dict) -> dict:
     """The summary table: each main result at each stage, with what is missing (not read, or no such item)."""
     st = [tg for tg in t["plan"]["targets"] if tg.get("stage")]
-    phases = [{"name": ph["name"], "label": ph.get("id") or ph["name"], "safety": "safety" in f"{ph.get('type', '')} {ph.get('id', '')}".lower()}
+    phases = [{"name": ph["name"], "label": ph.get("id") or ph["name"], "safety": plaxis_model.is_safety_phase(ph)}
               for ph in (m.get("phases") or [])[1:]]
     has = {k: bool(v) for k, v in {
         "plate": [s for s in m.get("structures") or [] if s.get("kind") == "plate"],
@@ -1363,7 +1366,7 @@ def get_study(pid: str):
                     (p["objective"] if p["objective"] in study.MODES else "sensitivity"))
     out = {"study": s, "modes": study.MODES}
     if m:
-        out |= {"catalog": _catalog_units(study.catalog(m), p["setup"]), **_study_preview(m, s)}
+        out |= {"catalog": _catalog_units(study.catalog(m, s), p["setup"]), **_study_preview(m, s)}
     return out
 
 
@@ -1391,7 +1394,8 @@ def put_study(pid: str, body: dict):
     s = study.clean(body)
     db.update_project(pid, setup={**p["setup"], "study": s})
     m = (p["setup"] or {}).get("plaxis_model")
-    return {"study": s, **(_study_preview(m, s) if m else {})}
+    # V26.1.9: the study's PLAXIS features (new structures, points, dynamics) add inputs and results to the catalog
+    return {"study": s, **({**_study_preview(m, s), "catalog": _catalog_units(study.catalog(m, s), p["setup"])} if m else {})}
 
 
 @app.post("/api/projects/{pid}/study/run")
@@ -1483,9 +1487,17 @@ def _start_study_task(p, s, variables, targets, runs, first, offset, previous):
     plan_data = {"variables": variables, "targets": targets, "goal": None, "output": report.output_options(p["setup"]),
                  "plaxis": p["setup"].get("plaxis") or "2d", "study": s, "first": first, "offset": offset,
                  "previous": previous}
+    m = (p["setup"] or {}).get("plaxis_model")
+    if m:  # V26.1.9: what PLAXIS adds in every run (safety phases after chosen stages, new structures, a dynamic phase)
+        from . import features
+        plan_data["features"] = features.solver_options(m, s)
     # V26.1.8: a Soft Soil Creep study calculates every run, Run 0 included, with gravity loading in the initial
     # phase: the full run of the Original File (K0 procedure) is then not comparable and is not taken over
-    if any(not (r.get("inputs") or {}) for r in runs) and not study.needs_gravity_initial({"variables": variables}, runs):
+    # QA V26.1.9 D3: a study whose features add phases in every run (safety phases, a dynamic phase) calculates Run 0
+    # too: the full run of the Original File has none of them (a dynamic study was reported 'succeeded' without one)
+    adds_phases = bool((plan_data.get("features") or {}).get("safety_after") or (plan_data.get("features") or {}).get("dynamic"))
+    if any(not (r.get("inputs") or {}) for r in runs) and not adds_phases and \
+            not study.needs_gravity_initial({"variables": variables}, runs):
         base = _baseline_from_basic(p, targets)
         if base:
             plan_data["baseline"] = base
@@ -1581,6 +1593,10 @@ def _study_results(tid: str, swap: int | None = None):
         for r in runs + prev:
             r["outputs"] = {k: (units.to_display(v, tg[k].get("unit") or "", setup)[0] if k in tg else v)
                             for k, v in (r.get("outputs") or {}).items()}
+            prof = (r.get("outputs") or {}).get("_profiles")
+            if isinstance(prof, dict):  # V26.1.9 (batch 2): the profile values in the chosen unit (the distance in m)
+                r["outputs"]["_profiles"] = {k: [[a, units.to_display(b, tg[k].get("unit") or "", setup)[0]] for a, b in pts]
+                                             for k, pts in prof.items() if k in tg}
         t["plan"]["targets"] = _targets_to_display(t["plan"]["targets"], setup)
     out = study.results(t, runs, prev)
     allruns = prev + runs
@@ -1628,6 +1644,79 @@ def study_results(tid: str, swap: int | None = None):
     return {**out, "status": t["status"], "figures": exports.figures_b64(figs), "error": t.get("error"),
             "pct": round(min(100.0, pct), 1), "progress": (f"Run {cur['run']}: {prog['message']}" if cur and prog.get("message") else ""),
             "targets": t["plan"]["targets"], "variables": t["plan"]["variables"]}
+
+
+# --- Rev B of the module interface: Study plan, What next?, the handover and the chosen modification ------------
+@app.get("/api/projects/{pid}/plan")
+def get_plan(pid: str):
+    p = _project_or_404(pid)
+    return {"plan": study_plan.clean((p["setup"] or {}).get("plan")), "chains": study_plan.CHAINS, "chain_text": study_plan.CHAIN_TEXT,
+            "takes": {f"{a}>{b}": t for (a, b), t in study_plan.TAKES.items()}, "default_next": study_plan.DEFAULT_NEXT,
+            "questions": study_plan.QUESTION}
+
+
+@app.put("/api/projects/{pid}/plan")
+def put_plan(pid: str, body: dict):
+    """The Study plan (first page of the study page) and the order of the What next? suggestions, saved with the project."""
+    p = _project_or_404(pid)
+    pl = study_plan.clean(body)
+    db.update_project(pid, setup={**p["setup"], "plan": pl})
+    return {"plan": pl}
+
+
+@app.get("/api/tasks/{tid}/next")
+def task_next(tid: str):
+    t, out, _allruns, _figs = _study_results(tid, None)
+    p = db.get_project(t["project_id"]) or {}
+    mode = (t["plan"].get("study") or {}).get("mode") or t["objective"]
+    return study_plan.what_next(mode, (p.get("setup") or {}).get("plan"), {**out, "targets": t["plan"]["targets"]})
+
+
+@app.post("/api/tasks/{tid}/handover")
+def task_handover(tid: str, body: dict):
+    """Proceed ({"save": "open"}: the next module opens with the study pre-filled from this one) or Pre-fill only
+    ({"save": "prefill"}: kept until that module is opened). Nothing is calculated."""
+    to = (body or {}).get("to")
+    if to not in study.MODES:
+        raise HTTPException(400, "Unknown module")
+    t = _task_or_404(tid)
+    if t["status"] in ("queued", "running"):
+        raise HTTPException(409, "The runs are still calculating.")
+    t, out, allruns, _figs = _study_results(tid, None)
+    s = study.clean(study_plan.handover({**t, "id": tid}, out, allruns, to))
+    how = (body or {}).get("save", "open")
+    if how in ("open", "prefill", True):
+        p = _project_or_404(t["project_id"])
+        pre = {k: v for k, v in ((p["setup"] or {}).get("prefill") or {}).items() if k != to}
+        if how == "prefill":  # Pre-fill only: kept until the module is opened
+            pre[to] = s
+            db.update_project(p["id"], setup={**p["setup"], "prefill": pre})
+        else:  # Proceed: the next module opens with it
+            db.update_project(p["id"], setup={**p["setup"], "study": s, "prefill": pre})
+        db.log("handover", {"from": tid, "to": to, "how": how, "taken": s["link"]["taken"]}, p["id"], tid)
+    return {"study": s}
+
+
+@app.delete("/api/projects/{pid}/prefill/{mode}")
+def drop_prefill(pid: str, mode: str):
+    p = _project_or_404(pid)
+    pre = {k: v for k, v in ((p["setup"] or {}).get("prefill") or {}).items() if k != mode}
+    db.update_project(pid, setup={**p["setup"], "prefill": pre})
+    return {"ok": True}
+
+
+@app.post("/api/tasks/{tid}/choose")
+def task_choose(tid: str, body: dict):
+    """Rev B W1.5 Choose ★: the modification handed to Design scenarios (default: rank 1)."""
+    t = _task_or_404(tid)
+    run = (body or {}).get("run")
+    st = dict(t["plan"].get("study") or {})
+    if run is None:
+        st.pop("chosen", None)
+    else:
+        st["chosen"] = int(run)
+    db.update_task(tid, plan={**t["plan"], "study": st})
+    return {"ok": True, "chosen": st.get("chosen")}
 
 
 def _fname(t: dict, ext: str) -> str:
@@ -1882,7 +1971,7 @@ def open_run_file(tid: str, idx: int, body: dict | None = None):
 @app.get("/api/projects/{pid}/geometry.png")
 def geometry_image(pid: str):
     p = _project_or_404(pid)
-    png = exports.geometry_png((p["setup"] or {}).get("plaxis_model") or {})
+    png = exports.geometry_png((p["setup"] or {}).get("plaxis_model") or {}, (p["setup"] or {}).get("study"))
     if not png:
         raise HTTPException(404, "The model is not read yet.")
     return StreamingResponse(io.BytesIO(png), media_type="image/png")

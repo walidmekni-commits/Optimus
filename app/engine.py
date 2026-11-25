@@ -65,6 +65,9 @@ def _run_task(task_id: str) -> None:
     solver.want_model = bool(plan.get("basic"))
     from .study import needs_gravity_initial
     solver.gravity_initial = needs_gravity_initial(plan, db.get_runs(task_id))  # V26.1.8: Soft Soil Creep → gravity loading in every run
+    # V26.1.9: what PLAXIS adds in every run of the study: safety phases, new structures, a dynamic phase
+    for k, v in (plan.get("features") or {}).items():  # set when the study's runs were made (main._start_study_task)
+        setattr(solver, k, v)
     tm = (plan.get("study") or {}).get("time") or {}
     solver.longterm = float(tm.get("longterm") or 0) if tm.get("on") or (plan.get("study") or {}).get("series") else 0.0  # V26.1.8  # the full run of the uploaded model also reads its geometry
     # PLAXIS Output images of each run, as chosen in "What do you prefer to visualize?" (the full run: the main ones)
@@ -118,7 +121,9 @@ def _run_task(task_id: str) -> None:
                     db.update_run(run["id"], attempts=attempts, error=err)
                     time.sleep(delay)
                 else:
-                    db.update_run(run["id"], status="failed", attempts=attempts, error=err)
+                    kept = getattr(solver, "last_applied", None)  # QA V26.1.9 D8: what the failed run set
+                    db.update_run(run["id"], status="failed", attempts=attempts, error=err,
+                                  **({"outputs": kept} if kept else {}))
 
     if _stop_asked(task_id):  # Stop pressed: the run in progress finished, the others wait for Restart
         for r in db.get_runs(task_id):
@@ -136,7 +141,9 @@ def _run_task(task_id: str) -> None:
     db.log("result", result, pid, task_id)
     db.add_message(pid, "assistant", result["text"])
     if failed:
-        msg = f"{len(failed)} of {len(runs)} run(s) failed after {retries + 1} attempt(s) each."
+        tries = sorted({int(r.get("attempts") or 1) for r in failed})  # N2: an error that repeats is not retried
+        msg = (f"{len(failed)} of {len(runs)} run(s) failed"
+               + (f" after {tries[0]} attempt(s) each." if len(tries) == 1 else f" after {tries[0]} to {tries[-1]} attempts."))
         return _fail(task, pid, msg, failed)
     if plan.get("basic") and not plan.get("example"):
         _remember_basic(pid, project, plan, solver, runs)

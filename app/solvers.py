@@ -1,6 +1,7 @@
 """Solver backends. 'plaxis' drives PLAXIS 2D/3D through its remote scripting server; 'simulated' fakes the
 results so the whole workflow can be tried and tested without PLAXIS."""
 import hashlib
+import math
 import json
 import random
 import re
@@ -46,6 +47,21 @@ def check_data_folder(path: Path) -> None:
 
 class SolverError(RuntimeError):
     pass
+
+
+def hoek_brown_mc(sci: float, gsi: float, mi: float, d: float = 0.0, s3max: float | None = None) -> tuple[float, float, str]:
+    """V26.1.9 (P2): the Mohr-Coulomb c' (kN/m²) and φ' (°) equivalent to a Hoek-Brown rock mass over 0 < σ3 < σ3max
+    (Hoek, Carranza-Torres & Corkum 2002), σ3max = σci / 4 unless given."""
+    mb = mi * math.exp((gsi - 100) / (28 - 14 * d))
+    s_ = math.exp((gsi - 100) / (9 - 3 * d))
+    a = 0.5 + (math.exp(-gsi / 15) - math.exp(-20 / 3)) / 6
+    s3max = s3max if s3max is not None else sci / 4
+    n = s3max / sci
+    k = 6 * a * mb * (s_ + mb * n) ** (a - 1)
+    phi = math.degrees(math.asin(k / (2 * (1 + a) * (2 + a) + k)))
+    c = sci * ((1 + 2 * a) * s_ + (1 - a) * mb * n) * (s_ + mb * n) ** (a - 1) / \
+        ((1 + a) * (2 + a) * math.sqrt(1 + k / ((1 + a) * (2 + a))))
+    return c, phi, f"Hoek-Brown σci {sci:g}, GSI {gsi:g}, mi {mi:g}, D {d:g}, σ3max {s3max:g}: mb {mb:.4g}, s {s_:.4g}, a {a:.4g}"
 
 
 # ---------------------------------------------------------------------------
@@ -116,8 +132,29 @@ class SimulatedSolver:
                     not any(k in key for k in ("fos", "msf", "safety", "factor")):
                 out[t.name] = round(out[t.name] * (0.3 if stat == "min" else 0.55), 5)
             ph = re.search(r"(\d+)$", t.phase or "")
-            if ph and isinstance(out.get(t.name), float) and not any(k in key for k in ("fos", "msf", "safety", "factor")):
+            if ph and (t.phase or "").startswith("@safety:") and isinstance(out.get(t.name), float):
+                out[t.name] = round(out[t.name] * (1 + 0.6 / (int(ph.group(1)) + 1)), 3)  # V26.1.9: FoS falls stage by stage
+            elif ph and isinstance(out.get(t.name), float) and not any(k in key for k in ("fos", "msf", "safety", "factor")):
                 out[t.name] = round(out[t.name] * min(1.0, 0.25 + 0.19 * int(ph.group(1))), 5)  # grows stage by stage
+        for t in targets:  # V26.1.9: the settlement trough (m³/m) and the volume loss (%) in their own ranges
+            res = t.result or ""
+            if "|trough" in res and isinstance(out.get(t.name), float):
+                w = self._w(res)
+                out[t.name] = round((0.4 + 1.2 * w) * (1.2 - 0.6 * s), 3) if res.split("|trough", 1)[1].startswith(":") \
+                    else round((1 + 4 * w) * (1.2 - 0.6 * s), 3)
+        for t in targets:  # V26.1.9 (batch 2): the settlement / wall deflection curve of the run
+            res = t.result or ""
+            if "|profile" in res and isinstance(out.get(t.name), float):
+                peak = out[t.name]
+                if "wall" in res:
+                    pts = [[-z, round(peak * math.sin(math.pi * min(1.0, (z + 1) / 14)) * (1 - z / 40), 6)] for z in range(0, 19)]
+                else:
+                    pts = [[float(x), round(-peak * math.exp(-((x - 30) / (8 + 6 * s)) ** 2), 6)] for x in range(0, 61, 2)]
+                out.setdefault("_profiles", {})[t.name] = pts
+                out[t.name] = max(abs(b) for _, b in pts)
+        applied = self._applied(inputs, variables)
+        if applied:
+            out["_stages_applied"] = applied
         plots = [k for k in getattr(self, "want_plots", None) or [] if k in SIM_KEYS]
         if plots:
             try:
@@ -127,6 +164,28 @@ class SimulatedSolver:
         return out
 
 
+def _sim_applied(self, inputs: dict, variables: list) -> list[str]:
+    """V26.1.9: what the PLAXIS solver would set in the stages for this run (kept with the run as with PLAXIS)."""
+    out = []
+    for ph in getattr(self, "safety_after", None) or []:
+        out.append(f"safety phase added after {ph} (simulated)")
+    for name, sp in (getattr(self, "additions", None) or {}).items():
+        v = next((x for x in variables if x.plaxis_ref == f"{name}.add"), None)
+        on = v is None or (numeric(inputs.get(v.name)) if v.name in inputs else 0) == 1
+        if on:
+            out.append(f"{name}: {sp.get('kind')} added, active from {sp.get('phase')} (simulated)")
+    d = getattr(self, "dynamic", None)
+    if d:
+        out.append(f"dynamic phase added after {d.get('after')} (simulated)")
+    for v in variables:
+        ref = v.plaxis_ref or ""
+        if v.name in inputs and ("@" in ref or ref.startswith(("WaterLevel", "Dynamic.", "Design."))):
+            val = inputs[v.name]
+            out.append(f"{ref} = {val[0] if isinstance(val, (list, tuple)) else val} (simulated)")
+    return out
+
+
+SimulatedSolver._applied = _sim_applied
 SIM_KEYS = ("utot", "ux", "uy", "pexcess", "plate_m", "plate_q", "plate_n")
 
 
@@ -183,7 +242,7 @@ def _span(v: Variable):
 
 
 # ---------------------------------------------------------------------------
-from .plaxis_model import area_edit  # noqa: E402
+from .plaxis_model import area_edit, calc_type_name  # noqa: E402
 SHIFT_REF = __import__("re").compile(r"^(.+)\.(\w+)\+(?:\*(-?[\d.]+(?:[eE][-+]?\d+)?))?(?:~(-?[\d.]+(?:[eE][-+]?\d+)?))?$")
 LOAD_PROPS_ALL = {"sigx", "sigy", "sigz", "sigz_ref", "qx_start", "qy_start", "qz_start", "qx_end", "qy_end", "qz_end",
                   "fx", "fy", "fz"}
@@ -197,7 +256,11 @@ def _obj_name(o) -> str:
         return str(o)
 
 
-class PlaxisSolver:
+from .plaxis_p1 import P1Mixin  # noqa: E402  V26.1.9: the P1 features of the QA/QC missing-features report
+from .plaxis_p2 import P2Mixin, new_p2  # noqa: E402  V26.1.9: batch 2
+
+
+class PlaxisSolver(P1Mixin, P2Mixin):
     """Drives PLAXIS through its remote scripting server (Expert > Configure remote scripting server).
     Needs the `plxscripting` package that ships with PLAXIS, and this app running where it can reach PLAXIS
     (normally the same Windows PC). Each run opens the original model, applies the variables, calculates,
@@ -509,7 +572,8 @@ class PlaxisSolver:
             return
         done = 0
         for group in ("Plates", "NodeToNodeAnchors", "FixedEndAnchors", "Anchors", "EmbeddedBeams", "EmbeddedBeamRows",
-                      "Geogrids", "Beams", "LineLoads", "SurfaceLoads", "PointLoads", "Interfaces"):
+                      "Geogrids", "Beams", "LineLoads", "SurfaceLoads", "PointLoads", "Interfaces", "PositiveInterfaces",
+                      "NegativeInterfaces", "Wells", "Drains"):
             for o in list(getattr(g_i, group, []) or []):
                 n = _obj_name(o)
                 if n == name or n.startswith(name + "_"):
@@ -543,10 +607,14 @@ class PlaxisSolver:
         last = ""
         for ph in list(g_i.Phases):
             try:
-                kind = str(getattr(ph, "DeformCalcType", "")).lower()
+                kind = calc_type_name(getattr(ph, "DeformCalcType", "")).lower()
             except Exception:  # noqa: BLE001
                 kind = ""
-            if "safety" not in kind:
+            try:
+                ident = str(ph.Identification.value)
+            except Exception:  # noqa: BLE001
+                ident = ""
+            if "safety" not in kind and "dynamic" not in kind and not ident.startswith("OPTIMUS"):
                 last = _obj_name(ph)
         phase_o = self._phase(g_o, last)
         is3 = hasattr(g_o.ResultTypes.Soil, "Uz")
@@ -622,21 +690,41 @@ class PlaxisSolver:
             except Exception:  # noqa: BLE001
                 return d
         pref, eoed, eur, e50, nuur = get("pRef", 100.0), get("EOedRef"), get("EURRef"), get("E50Ref"), get("nuUR", 0.2)
-        if not (eoed and eur):
-            raise SolverError(f"{name}: Eoed,ref and Eur,ref are needed to derive the {code} parameters")
-        sets = {}
-        if code == 2:
+        first = lambda *names: next((x for x in (get(n) for n in names) if x is not None), None)
+        sci, gsi = first("SigmaCi", "SigmaCI", "Sigmaci", "sigmaci"), first("GSI")
+        sets, note = {}, ""
+        if code == 2 and sci and gsi is not None:
+            # V26.1.9 (P2): Mohr-Coulomb equivalent to Hoek-Brown (Hoek, Carranza-Torres & Corkum 2002), σ3max = σci / 4
+            c, phi, info = hoek_brown_mc(sci, gsi, first("mi", "Mi") or 10.0, first("D", "Disturbance") or 0.0)
+            erm = first("ERef", "Eref", "E", "Erm", "ERm")
+            sets = {("cRef", "cref", "c"): c, ("phi", "Phi"): phi, ("psi", "Psi", "?"): 0.0}
+            if erm:
+                sets[("ERef", "Eref", "E", "?")] = erm
+            note = f" ({info})"
+        else:
+            if not (eoed and eur):
+                raise SolverError(f"{name}: Eoed,ref and Eur,ref are needed to derive the {code} parameters")
+        if code == 2 and not sets:
             sets = {("ERef", "Eref", "E"): e50 or eoed, ("nu", "Nu", "?"): 0.3}  # "?" = optional
         elif code == 4:
             g0 = get("G0Ref") or 2.5 * eur / (2 * (1 + nuur))
             sets = {("G0Ref", "G0ref"): g0, ("gamma07",): get("gamma07") or 1.5e-4}
-        elif code == 6:
+        elif code in (5, 6, 8):
             lam = pref / eoed
             # κ* from Eur is close to λ* for a stiff sand (Eur ≈ 3 Eoed), which made the K0 procedure fail in PLAXIS
             # (LogInfo -5, QA run 23 Nov); the usual SSC ratio κ*/λ* = 0.2 is used when it is smaller
             kap = min(3 * (1 - 2 * nuur) * pref / eur, 0.2 * lam)
-            m_ = mu if mu is not None else lam / 25
-            sets = {self.SSC_NAMES["lambda"]: lam, self.SSC_NAMES["kappa"]: kap, self.SSC_NAMES["mu"]: m_}
+            if code == 6:
+                m_ = mu if mu is not None else lam / 25
+                sets = {self.SSC_NAMES["lambda"]: lam, self.SSC_NAMES["kappa"]: kap, self.SSC_NAMES["mu"]: m_}
+            elif code == 5:  # V26.1.9 (P2): Soft Soil, the same λ*, κ* without creep
+                sets = {self.SSC_NAMES["lambda"]: lam, self.SSC_NAMES["kappa"]: kap}
+            else:  # V26.1.9 (P2): Modified Cam-Clay: λ = λ* (1 + e0), κ = κ* (1 + e0), M from φ' (triaxial compression)
+                e0 = first("eInit", "einit", "e0") or 1.0
+                phi = first("phi", "Phi") or 25.0
+                sp = math.sin(math.radians(phi))
+                sets = {("lambda", "Lambda"): lam * (1 + e0), ("kappa", "Kappa"): kap * (1 + e0),
+                        ("M", "MCC_M", "?"): 6 * sp / (3 - sp), ("nu", "Nu", "nuUR", "?"): min(max(nuur, 0.1), 0.35)}
         try:
             mat.setproperties("SoilModel", int(code))
         except Exception as e:  # noqa: BLE001
@@ -653,7 +741,7 @@ class PlaxisSolver:
             else:
                 if "?" not in names:
                     raise SolverError(f"{name}: none of {', '.join(names)} could be set for soil model {code}")
-        return f"{name}: " + ", ".join(done)
+        return f"{name}: " + ", ".join(done) + note
 
     LONGTERM_ID = "Long term"
 
@@ -686,6 +774,16 @@ class PlaxisSolver:
 
     def _phase(self, g, name: str):
         phases = list(g.Phases)
+        from .features import DYNAMIC_ID, DYNAMIC_PHASE, SAFETY_ID, SAFETY_PHASE
+        if name.startswith(SAFETY_PHASE) or name == DYNAMIC_PHASE:  # V26.1.9: a phase OPTIMUS added in this run
+            want = f"{SAFETY_ID} {name[len(SAFETY_PHASE):]}" if name.startswith(SAFETY_PHASE) else DYNAMIC_ID
+            for p in reversed(phases):
+                try:
+                    if str(p.Identification.value).startswith(want):
+                        return p
+                except Exception:  # noqa: BLE001
+                    continue
+            raise SolverError(f"not in this run: no phase '{want}'")
         if name == "@longterm":  # the long-term phase added by _add_longterm (V26.1.8)
             for p in reversed(phases):
                 try:
@@ -697,7 +795,8 @@ class PlaxisSolver:
         if not name:  # the last stage of the works (not the long-term phase added for time results)
             for p in reversed(phases):
                 try:
-                    if str(p.Identification.value).startswith(self.LONGTERM_ID):
+                    ident = str(p.Identification.value)
+                    if ident.startswith(self.LONGTERM_ID) or ident.startswith(DYNAMIC_ID) or ident.startswith(SAFETY_ID):
                         continue
                 except Exception:  # noqa: BLE001
                     pass
@@ -711,6 +810,7 @@ class PlaxisSolver:
     def run(self, files, inputs: dict, variables: list[Variable], targets: list[Target], run_dir: Path) -> dict:
         from plxscripting.easy import new_server
 
+        self.last_applied = None
         run_dir = run_dir.resolve()
         run_dir.mkdir(parents=True, exist_ok=True)
         say = getattr(self, "progress", None) or (lambda msg, pct=None: None)  # what the run is doing (and %), shown on the page
@@ -725,6 +825,11 @@ class PlaxisSolver:
         areas: dict[str, list] = {}  # load name: edits of its area (edges / corners)
         moved: dict[tuple[str, str], list] = {}  # (point, axis): [before, expected], checked after all are set
         soil_models = []  # V26.1.8: what each soil model switch set, kept with the run
+        # V26.1.9: features applied after the variables (water levels and conditions per stage, interfaces with their
+        # own material, design approach, new structures, the dynamic load)
+        levels, conds, ifaces, design, adds, dyn, staged_done = {}, [], {}, 0, {}, dict(self.dynamic or {}), []
+        p2 = new_p2()  # V26.1.9 (batch 2): slopes, staged fill / excavation, mesh refinement, phase settings
+        is3 = path.suffix.lower() in (".p3d", ".p3dxml")
         first = lambda v: 0 if any(r.strip().lower().endswith((".soilmodel", ".sscmu", ".stiffnessfactor")) for r in (v.plaxis_ref or "").split(";")) else 1
         for v in sorted(variables, key=first):  # a soil model is switched before the other parameters of the run
             if v.name not in inputs:
@@ -772,6 +877,40 @@ class PlaxisSolver:
                         raise SolverError(f"{obj_name}: no stiffness parameter to scale")
                     soil_models.append(f"{obj_name}: stiffness × {float(value):g}: " + ", ".join(done))
                     continue
+                pl = prop.lower()
+                if pl == "drainagetype":  # V26.1.9: Drained, Undrained A / B / C, Non-porous
+                    soil_models.append(self._drainage(g_i, obj_name, int(round(value))))
+                    continue
+                if pl == "poreprescalctype":  # V26.1.9: phreatic or steady-state groundwater flow (re-QA D5: spelling fixed)
+                    staged_done.append(self._pore_type(g_i, obj_name, int(round(value))))
+                    continue
+                if obj_name == "WaterLevel" and pl == "level" and phase:  # V26.1.9: water level per stage
+                    levels[phase] = value
+                    continue
+                if pl == "watercondition" and phase:  # V26.1.9: dry / interpolate clusters in a stage
+                    conds.append((obj_name, phase, int(round(value))))
+                    continue
+                if pl.startswith("iface"):  # V26.1.9: the interface's own Rinter / virtual thickness
+                    ifaces.setdefault(obj_name, {})[prop[5:]] = value
+                    continue
+                if self._p2_take(p2, obj_name, prop, phase, value):  # V26.1.9 (batch 2)
+                    continue
+                if obj_name == "Design" and pl == "approach":  # V26.1.9: EC7 design approach
+                    design = int(round(value))
+                    continue
+                if obj_name == "Dynamic":  # V26.1.9: amplitude / frequency / duration of the dynamic phase
+                    dyn[pl] = value
+                    continue
+                if obj_name in (self.additions or {}) and (pl == "add" or pl.startswith("shift")):  # V26.1.9
+                    a = adds.setdefault(obj_name, {"on": False, "shift": 0.0})
+                    if pl == "add":
+                        a["on"] = value >= 0.5
+                    else:
+                        a["shift"] = value
+                    continue
+                if phase and prop in ("PrestressForce", "Qwell", "Q", "Discharge", "h", "Head", "Cref"):  # V26.1.9
+                    staged_done.append(self._set_staged(g_i, obj_name, prop, phase, value))
+                    continue
                 if obj_name.lower() == "mesh":  # "Mesh.size": relative element size used when meshing
                     mesh_size = value
                     continue
@@ -814,6 +953,22 @@ class PlaxisSolver:
             say(f"Changing the area of {name}", 28)
             applied_area = self._reshape_load(g_i, name, eds, path.suffix.lower() == ".p3d")
             (run_dir / f"area_{name}.txt").write_text(applied_area, encoding="utf-8")
+        effects = 1.0
+        if design:  # V26.1.9: factored strengths and variable loads (after the other values of the run)
+            done, effects = self._design_approach(g_i, design)
+            soil_models += done
+        if ifaces:
+            say("Interfaces with their own properties", 29)
+            soil_models += self._interfaces(g_i, ifaces)
+        made = []
+        specs = [{**self.additions[n], "shift": a["shift"]} for n, a in adds.items() if a["on"]]
+        if specs:
+            say(f"Drawing {len(specs)} new structure(s)", 30)
+            made = self._add_structures(g_i, specs, is3)
+            geometry_changed = True
+        p2_done, remesh = self._p2_geometry(g_i, p2, is3, moved)
+        soil_models += p2_done
+        geometry_changed = geometry_changed or remesh
         applied = self._check_geometry(g_i, moved)
         (run_dir / "geometry_applied.txt").write_text("\n".join(applied) or "no geometry change", encoding="utf-8")
         if geometry_changed or mesh_size is not None:  # new geometry or mesh size: re-mesh before calculating
@@ -824,9 +979,22 @@ class PlaxisSolver:
         for name in removals:
             if not name.lower().startswith("point"):
                 self._remove(g_i, name)
+        if made:
+            staged_done += self._activate_added(g_i, made)
+        if levels:
+            staged_done += self._water_levels(g_i, levels, is3)
+        if conds:
+            staged_done += self._cluster_conditions(g_i, conds)
+        staged_done += self._p2_stages(g_i, p2)
         if getattr(self, "longterm", 0):
             say(f"Adding the long-term phase ({self.longterm:g} days)", 38)
             self._add_longterm(g_i, self.longterm)
+        if self.safety_after:  # V26.1.9: a safety phase after each chosen stage (FoS per stage)
+            say(f"Adding {len(self.safety_after)} safety phase(s)", 38)
+            staged_done += self._add_safety(g_i, self.safety_after)
+        if self.dynamic:  # V26.1.9: the dynamic phase of the study
+            say("Adding the dynamic phase", 39)
+            staged_done += self._add_dynamic(g_i, {**self.dynamic, **dyn}, is3)
         if getattr(self, "gravity_initial", False):
             # V26.1.8: with Soft Soil Creep the K0 procedure of the initial phase fails in PLAXIS (LogInfo -5, QA
             # diagnosis on UA-22, any κ*); gravity loading calculates the initial stresses. Every run of such a study
@@ -843,13 +1011,26 @@ class PlaxisSolver:
                 raise SolverError("Could not set the initial phase to gravity loading (needed for Soft Soil Creep).")
             soil_models.append("InitialPhase: gravity loading (K0 procedure fails with Soft Soil Creep)")
         self._mark_phases(g_i)
+        # QA V26.1.9 D8: what the run set is kept even when PLAXIS fails afterwards (engine: outputs of a failed run)
+        self.last_applied = {k: v for k, v in (("_soil_models", list(soil_models)), ("_stages_applied", list(staged_done))) if v}
+        for fname, lines in (("soil_models.txt", soil_models), ("stages_applied.txt", staged_done)):
+            if lines:
+                (run_dir / fname).write_text("\n".join(lines), encoding="utf-8")
         say(f"Calculating every phase in PLAXIS ({len(list(g_i.Phases))} phases); a 3D model can take a long time", 40)
-        g_i.calculate()
+        try:
+            g_i.calculate()
+            calc_err = None
+        except Exception as e:  # noqa: BLE001 - PLAXIS 3D can raise when a phase fails: its LogInfo says why (N2, D8)
+            calc_err = e
         say("Checking the phases and saving the run", 85)
         for p in g_i.Phases:
             info = str(getattr(getattr(p, "LogInfo", None), "value", "0") or "0")
             if info not in ("0", ""):
-                raise SolverError(f"Phase {p.Name.value} failed (LogInfo {info})")
+                from .insight import LOGINFO
+                why = LOGINFO.get(info.strip(), f"PLAXIS LogInfo {info}")  # QA V26.1.9 D8: the code said in words
+                raise SolverError(f"Phase {p.Name.value} failed: {why}")
+        if calc_err is not None:
+            raise calc_err
 
         run_file = run_dir / (path.stem + "_" + run_dir.name + path.suffix)
         g_i.save(str(run_file))
@@ -858,6 +1039,9 @@ class PlaxisSolver:
         if soil_models:
             out["_soil_models"] = soil_models
             (run_dir / "soil_models.txt").write_text("\n".join(soil_models), encoding="utf-8")
+        if staged_done:  # V26.1.9: what was set in the stages (prestress, water, new structures, added phases)
+            out["_stages_applied"] = staged_done
+            (run_dir / "stages_applied.txt").write_text("\n".join(staged_done), encoding="utf-8")
         say("Reading the results in PLAXIS Output", 90)
         def read(t):  # one result of the run (the first read opens PLAXIS Output)
             nonlocal g_o
@@ -886,7 +1070,25 @@ class PlaxisSolver:
                 rgroup = getattr(g_o.ResultTypes, group)
             except Exception as e:  # noqa: BLE001
                 raise SolverError(f"not in this model: no {group} results ({e})")
-            res = g_o.getresults(phase_o, _rtype(rgroup, rtype), "node")
+            w = where.strip().lower()
+            if w.startswith("at "):  # V26.1.9: the value at a chosen point
+                return self._at_point(g_o, phase_o, _rtype(rgroup, rtype), where.strip()[3:], is3)
+            if w.startswith("trough"):  # V26.1.9: settlement trough volume / volume loss
+                return self._trough(g_o, phase_o, rgroup, _rtype(rgroup, rtype), w, is3)
+            if w.startswith("profile"):  # V26.1.9 (batch 2): a curve along the surface / the wall, kept with the run
+                pts = self._profile(g_o, phase_o, rgroup, _rtype(rgroup, rtype), w, is3)
+                out.setdefault("_profiles", {})[t.name] = [[round(a, 4), round(b, 6)] for a, b in pts]
+                return max(abs(b) for _, b in pts)
+            try:
+                rt = _rtype(rgroup, rtype)
+            except SolverError:
+                if rtype.lower() != "qtot":
+                    raise
+                rt = None
+            if rt is None:  # QA V26.1.9 D6: PLAXIS 3D has no Qtot: |q| from qx, qy, qz
+                res = self.q_total(g_o, phase_o, rgroup, is3)
+            else:
+                res = g_o.getresults(phase_o, rt, "node")
             try:
                 values = [float(x) for x in res]
             except (TypeError, ValueError):  # e.g. anchors not yet active in this stage: PLAXIS answers with a text
@@ -916,6 +1118,8 @@ class PlaxisSolver:
             for attempt in range(2):
                 try:
                     out[t.name] = read(t)
+                    if effects != 1.0 and isinstance(out[t.name], float) and self.is_force(t.result):
+                        out[t.name] *= effects  # V26.1.9: DA1-C1 / DA2*: design value of the structural forces
                     break
                 except Exception as e:  # noqa: BLE001
                     if attempt == 0 and "no active project" in str(e).lower():
@@ -951,7 +1155,16 @@ class PlaxisSolver:
 # this PLAXIS has is read.
 RESULT_ALIASES = {"N1": ["N11", "N_1", "N1"], "N11": ["N11", "N1"], "N2": ["N22", "N2"],
                   "AnchorForce3D": ["AnchorForce3D", "N", "AnchorForce"], "AnchorForce2D": ["AnchorForce2D", "Nx2D", "N"],
-                  "M11": ["M11", "M_11"], "Q13": ["Q13", "Q_13"], "Q12": ["Q12", "Q_12"]}
+                  "M11": ["M11", "M_11"], "Q13": ["Q13", "Q_13"], "Q12": ["Q12", "Q_12"],
+                  # V26.1.9: structure, interface, flow and dynamic results
+                  "Nx2D": ["Nx2D", "N"], "Tskin": ["Tskin", "TSkin", "Tskin3D"], "Tskin2D": ["Tskin2D", "Tskin", "TSkin"],
+                  "M2": ["M2", "M_2"], "M3": ["M3", "M_3"],
+                  "InterfaceEffectiveNormalStress": ["InterfaceEffectiveNormalStress", "SigmaNE", "EffectiveNormalStress", "SigN"],
+                  "InterfaceShearStress": ["InterfaceShearStress", "TauRel", "Tau", "ShearStress"],
+                  "InterfaceRelativeShearStress": ["InterfaceRelativeShearStress", "RelativeShearStress", "TauRelative"],
+                  "Qtot": ["Qtot", "QTot", "qTot", "Q", "Qabs"], "GroundwaterHead": ["GroundwaterHead", "Head", "GWHead"],
+                  "PSteady": ["PSteady", "PSteadyState", "SteadyStatePorePressure"], "PActive": ["PActive", "PActivePorePressure"],
+                  "Ax": ["Ax", "AccelerationX"], "Vx": ["Vx", "VelocityX"]}
 
 
 def _rtype(rgroup, name: str):
@@ -964,22 +1177,37 @@ def _rtype(rgroup, name: str):
 
 
 def _is_safety(phase) -> bool:
+    """A safety (strength reduction) phase. QA V26.1.9 D1: PLAXIS 3D 2024.3 gives the calculation type as a number
+    (7 = safety), not as the word 'safety'."""
     for attr in ("DeformCalcType", "CalculationType"):
         try:
-            v = getattr(phase, attr)
-            if "safety" in str(getattr(v, "value", v)).lower():
+            if "safety" in calc_type_name(getattr(phase, attr)).lower():
                 return True
         except Exception:  # noqa: BLE001
             continue
     return False
 
 
+TRANSIENT = ("connection", "could not reach", "did not answer", "timed out", "timeout", "refused", "reset by peer",
+             "broken pipe", "remote scripting server", "no active project", "no result from plaxis", "server is busy",
+             "being used by another process", "permission denied", "winerror 32", "temporarily", "eof occurred")
+
+
 def deterministic(err: str) -> bool:
     """A PLAXIS error that the same inputs will give again (an invalid material, a property PLAXIS does not know, a
-    geometry PLAXIS refused): retrying it only repeats a 10-minute calculation (QA V26.1.8)."""
+    geometry PLAXIS refused, a phase that collapses): retrying it only repeats a calculation of up to half an hour (QA
+    V26.1.8; re-QA V26.1.9 N2: 'no material to copy', 'Incorrect new value', LogInfo 101 were calculated 4 times).
+    QA V26.1.9 N2: only an error of the link to PLAXIS (connection lost, timeout, a file locked by OneDrive) is retried;
+    every other error, known or not, is given at once."""
     e = (err or "").lower()
-    return any(k in e for k in ("invalid material", "unknown property", "is not a number", "did not take the new geometry",
-                                "not found", "no plaxis reference", "overlap", "is invalid", "not in this model", "soil model", "failed (loginfo"))
+    if any(k in e for k in ("invalid material", "unknown property", "is not a number", "did not take the new geometry",
+                            "not found", "no plaxis reference", "overlap", "is invalid", "not in this model", "soil model",
+                            "loginfo", "drainage type", "did not draw", "dynamic", "interface material", "safety phase",
+                            "pore pressure calculation", "water level", "water condition", "could not set",
+                            "exist in plaxis 3d only", "no material to copy", "incorrect new value", "collapse",
+                            "did not converge", "not enough load steps", "ultimate state", "load advancement", "failed:")):
+        return True
+    return not any(k in e for k in TRANSIENT)
 
 
 def _try(g_i, mode: str) -> None:

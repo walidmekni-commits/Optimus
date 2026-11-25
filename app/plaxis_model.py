@@ -42,13 +42,25 @@ ANCHOR_PROPS = [("EA", "Axial stiffness EA", "kN"), ("Lspacing", "Spacing Ls", "
 GEOGRID_PROPS = [("EA", "Axial stiffness EA", "kN/m"), ("EA1", "Axial stiffness EA1", "kN/m")]
 BEAM_PROPS = [("E", "Young's modulus E", "kN/m²"), ("Diameter", "Diameter", "m"), ("Lspacing", "Spacing Ls", "m"),
               ("Tskinstartmax", "Skin resistance T,start", "kN/m"), ("Fmax", "Base resistance Fmax", "kN")]
-MAT_PROPS = {"soil": SOIL_PROPS, "plate": PLATE_PROPS, "anchor": ANCHOR_PROPS, "geogrid": GEOGRID_PROPS,
+MAT_PROPS = {"soil": SOIL_PROPS, "plate": PLATE_PROPS, "anchor": ANCHOR_PROPS, "geogrid": GEOGRID_PROPS, "cable": ANCHOR_PROPS,
              "embedded_beam": BEAM_PROPS, "beam": BEAM_PROPS}
 LOAD_PROPS = {"line": [("qx_start", "qx"), ("qy_start", "qy"), ("qz_start", "qz")],
               "point": [("Fx", "Fx"), ("Fy", "Fy"), ("Fz", "Fz")],
               "surface": [("sigx", "σx"), ("sigy", "σy"), ("sigz", "σz"), ("sigz_ref", "σz,ref")]}
 LOAD_UNIT = {("2d", "line"): "kN/m/m", ("2d", "point"): "kN/m", ("3d", "line"): "kN/m", ("3d", "point"): "kN",
              ("3d", "surface"): "kN/m²", ("2d", "surface"): "kN/m²"}
+
+
+# V26.1.9: PLAXIS names of the well discharge and the drain head (the first one this PLAXIS has is used)
+WELL_PROPS = ("Qwell", "Q", "Discharge", "qwell")
+DRAIN_PROPS = ("h", "Head", "hmin")
+STRUCT_GROUPS = {"plate": ("Plates",), "anchor": ("NodeToNodeAnchors", "FixedEndAnchors"), "geogrid": ("Geogrids",), "cable": ("Cables",),
+                 "embedded_beam": ("EmbeddedBeams", "EmbeddedBeamRows"), "beam": ("Beams",)}
+DRAINAGE_TYPES = ["Drained: 0", "Undrained (A): 1", "Undrained (B): 2", "Undrained (C): 3", "Non-porous: 4"]
+PORE_TYPES = ["Phreatic: 0", "Steady-state groundwater flow: 1", "Use pressures from previous phase: 2"]
+CLUSTER_CONDITIONS = ["Global level: 0", "Dry: 1", "Interpolate: 2"]
+DESIGN_APPROACHES = ["Characteristic values (no factors): 0", "EC7 DA1 Combination 1: 1", "EC7 DA1 Combination 2: 2",
+                     "EC7 DA2*: 3", "EC7 DA3: 4"]
 
 
 # Labels of PLAXIS input parameters (any other numeric input parameter is shown under its PLAXIS name)
@@ -73,6 +85,7 @@ LABELS = {
     "TimeInterval": "Time interval", "MaxStepsStored": "Max steps stored", "Deform.ToleratedError": "Tolerated error",
     "Deform.MaxSteps": "Max steps", "Deform.MaxIterations": "Max iterations", "Deform.MaxUnloadingSteps": "Max unloading steps",
     "Deform.MaxLoadFractionPerStep": "Max load fraction per step", "PrestressForce": "Prestress force",
+    "Cref": "Contraction Cref", "Qwell": "Well discharge |Qwell|", "h": "Drain head h", "DeltaInter": "Virtual thickness factor δinter",
 }
 SKIP_PROP = re.compile(r"(?i)colou?r|number|index|^id$|identification|comment|type|model|drainage|behaviou?r|method|"
                        r"^use|valid|flag|count|version|^is[A-Z_]|selected|visible|guid|tabledata|determination|default|"
@@ -175,6 +188,31 @@ def _v(x):
         return x
 
 
+# QA V26.1.9 D1: PLAXIS 3D 2024.3 gives the calculation type of a phase as a number (1 K0 procedure, 4 Plastic,
+# 7 Safety on UA-22); the other numbers follow the order of the PLAXIS list (to confirm on PLAXIS, QA/QC)
+CALC_TYPE_CODES = {1: "K0 procedure", 2: "Gravity loading", 3: "Field stress", 4: "Plastic", 5: "Consolidation",
+                   6: "Fully coupled flow-deformation", 7: "Safety", 8: "Dynamic", 9: "Dynamic with consolidation"}
+
+
+def is_safety_phase(ph: dict) -> bool:
+    """A phase of the read model (dict) that is a safety phase, by its type (name or PLAXIS number) or its name."""
+    return "safety" in f"{calc_type_name(ph.get('type', ''))} {ph.get('id', '')}".lower()
+
+
+def calc_type_name(x) -> str:
+    """The calculation type of a phase as a name, whether PLAXIS gives the name or its number."""
+    v = _v(x)
+    t = str(v if v is not None else "").strip()
+    if isinstance(v, bool):
+        return t
+    if isinstance(v, (int, float)) or t.isdigit():
+        try:
+            return CALC_TYPE_CODES.get(int(float(t)), t)
+        except ValueError:
+            return t
+    return t
+
+
 def _num(x):
     try:
         v = float(_v(x))
@@ -207,6 +245,45 @@ def _xyz(p, is_3d: bool):
     return [x, y, (_num(getattr(p, "z", None)) or 0.0) if is_3d else 0.0]
 
 
+def read_boreholes(g_i, is_3d: bool) -> list[dict]:
+    """The boreholes and their soil layers (top, bottom, material), read in Soil mode."""
+    out = []
+    holes = _list(g_i, "Boreholes")
+    layers = _list(g_i, "Soillayers")
+    for bi, bh in enumerate(holes):
+        rec = {"name": _name(bh), "x": _num(bh.x) or 0.0, "y": (_num(getattr(bh, "y", None)) or 0.0) if is_3d else 0.0,
+               "head": _num(getattr(bh, "Head", None)), "layers": []}
+        for li, layer in enumerate(layers):
+            try:
+                zone = list(layer.Zones)[bi]
+            except Exception:  # noqa: BLE001
+                continue
+            top = bot = None
+            for t in (lambda z: z.Top, lambda z: z.Top.z, lambda z: z.Top.y):
+                try:
+                    top = _num(t(zone))
+                    if top is not None:
+                        break
+                except Exception:  # noqa: BLE001
+                    continue
+            for b in (lambda z: z.Bottom, lambda z: z.Bottom.z, lambda z: z.Bottom.y):
+                try:
+                    bot = _num(b(zone))
+                    if bot is not None:
+                        break
+                except Exception:  # noqa: BLE001
+                    continue
+            soil_mat = ""
+            try:
+                soil_mat = _name(_v(layer.Soil.Material))
+            except Exception:  # noqa: BLE001
+                pass
+            if top is not None and bot is not None:
+                rec["layers"].append({"name": _name(layer), "material": soil_mat, "top": top, "bottom": bot})
+        out.append(rec)
+    return out
+
+
 def _obj_points(obj, is_3d: bool) -> list:
     """Corner points of a line / polygon / surface, whatever this PLAXIS version exposes."""
     for get in (lambda o: [o.First, o.Second], lambda o: list(_v(o.Points)), lambda o: list(o)):
@@ -220,10 +297,185 @@ def _obj_points(obj, is_3d: bool) -> list:
     return []
 
 
+# QA V26.1.9 re-QA N1: PLAXIS 3D gives the points of a surface (a plate, an interface, a surface load) in the
+# surface's own local frame: UA-22's wall came back as (0, 0, 0) - (0, 12, 13.5) instead of x = 20, y 0 to -12, below
+# the ground. The points are turned into model coordinates through the surface's origin and local axes; where PLAXIS
+# gives more than one reading, the one that meets the anchors / beams and lies in the ground is kept.
+ORIGIN_NAMES = ("LocalOrigin", "Origin", "LocalOriginPoint", "Position")
+AXIS_NAMES = (("LocalAxis1", "LocalAxis2"), ("Axis1", "Axis2"), ("LocalXAxis", "LocalYAxis"), ("AxisX", "AxisY"))
+
+
+def _vec(o, name):
+    """A vector property of a PLAXIS object (an origin, an axis): an object with x, y, z, a tuple, or name + x / y / z."""
+    try:
+        v = _xyz(_v(getattr(o, name)), True)
+        if v and len(v) == 3:
+            return v
+    except Exception:  # noqa: BLE001
+        pass
+    comps = []
+    for c in "xyz":
+        val = None
+        for n in (name + c, name + c.upper(), f"{name}_{c}", f"{name}_{c.upper()}"):
+            try:
+                val = _num(getattr(o, n))
+            except Exception:  # noqa: BLE001
+                val = None
+            if val is not None:
+                break
+        comps.append(val)
+    return comps if all(c is not None for c in comps) else None
+
+
+def _frame(o):
+    """(origin, axis 1, axis 2) of a PLAXIS 3D surface, or None when this PLAXIS gives none."""
+    try:
+        names = [n for n in dir(o) if isinstance(n, str)]
+    except Exception:  # noqa: BLE001
+        names = []
+    origins = list(ORIGIN_NAMES) + [n for n in names if "origin" in n.lower() and n not in ORIGIN_NAMES]
+    pairs = list(AXIS_NAMES)
+    found = sorted(n for n in names if "axis" in n.lower() and n[-1:] in "12")
+    if len(found) >= 2:
+        pairs.append((found[0], found[1]))
+    org = next((v for v in (_vec(o, n) for n in origins) if v), None)
+    if org is None:
+        return None
+    for a, b in pairs:
+        a1, a2 = _vec(o, a), _vec(o, b)
+        if a1 and a2 and any(a1) and any(a2):
+            return org, a1, a2
+    return None
+
+
+def _unit(v):
+    n = math.sqrt(sum(c * c for c in v)) or 1.0
+    return [c / n for c in v]
+
+
+def _to_global(pts: list, frame) -> list[list]:
+    """The local points of a surface in model coordinates, in the two ways PLAXIS may order them (u, v, normal) or
+    (normal, u, v)."""
+    o, a1, a2 = frame
+    a1, a2 = _unit(a1), _unit(a2)
+    a3 = [a1[1] * a2[2] - a1[2] * a2[1], a1[2] * a2[0] - a1[0] * a2[2], a1[0] * a2[1] - a1[1] * a2[0]]
+    out = []
+    for order in ((0, 1, 2), (1, 2, 0)):
+        g = []
+        for q in pts:
+            q = (list(q) + [0.0, 0.0])[:3]
+            u, v, w = q[order[0]], q[order[1]], q[order[2]]
+            g.append([round(o[i] + u * a1[i] + v * a2[i] + w * a3[i], 6) for i in range(3)])
+        out.append(g)
+    return out
+
+
+def _surface_points(o, parent, is_3d: bool) -> list[list]:
+    """Every reading of an object's points in model coordinates (3D: through the surface's local frame too); the
+    first is the default, the right one is chosen once the whole model is read (_resolve_globals)."""
+    raw = _obj_points(parent, is_3d)
+    if not is_3d or len(raw) < 3:  # a line (anchor, beam) is given in model coordinates
+        return [raw]
+    cands = []
+    for src in (parent, o):
+        pts = raw if src is parent else (_obj_points(o, True) if o is not parent else [])
+        if not pts:
+            continue
+        fr = _frame(src)
+        if fr:
+            cands += _to_global(pts, fr)
+        cands.append(pts)
+    uniq = []
+    for c in cands:
+        if c and c not in uniq:
+            uniq.append(c)
+    return uniq or [raw]
+
+
+def _plane_hits(poly: list, ends: list, tol: float = 0.05) -> int:
+    """How many line ends (anchors, beams) lie on the surface (its plane and its box)."""
+    if len(poly) < 3:
+        return 0
+    p0 = poly[0]
+    n = None
+    for i in range(1, len(poly) - 1):
+        a = [poly[i][k] - p0[k] for k in range(3)]
+        b = [poly[i + 1][k] - p0[k] for k in range(3)]
+        c = [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]
+        if math.sqrt(sum(x * x for x in c)) > 1e-9:
+            n = _unit(c)
+            break
+    if n is None:
+        return 0
+    lo = [min(q[k] for q in poly) - tol for k in range(3)]
+    hi = [max(q[k] for q in poly) + tol for k in range(3)]
+    hits = 0
+    for e in ends:
+        if abs(sum((e[k] - p0[k]) * n[k] for k in range(3))) <= tol and all(lo[k] <= e[k] <= hi[k] for k in range(3)):
+            hits += 1
+    return hits
+
+
+def _resolve_globals(m: dict) -> None:
+    """N1: of the readings of each surface, the one that meets the anchors / beams and lies in the ground."""
+    ends = [list(map(float, (list(q) + [0.0])[:3])) for st in m["structures"] if len(st.get("points") or []) == 2
+            and not st.get("_alts") for q in st["points"]]
+    ends += [[p["x"], p["y"], p.get("z", 0.0)] for p in m["points"]]
+    top = max((lay["top"] for b in m["boreholes"] for lay in b.get("layers") or []), default=None)
+    flagged = []
+    for coll in ("structures", "interfaces", "loads", "contractions", "displacements"):
+        for it in m.get(coll) or []:
+            alts = it.pop("_alts", None)
+            if not alts:
+                continue
+
+            def score(c):
+                if top is None:
+                    return _plane_hits(c, ends)
+                if coll == "loads":  # a surface load lies on the ground
+                    return -abs(max(q[2] for q in c) - top)
+                return 2 * _plane_hits(c, ends) - sum(1 for q in c if q[2] > top + 0.5)
+            best = max(alts, key=lambda c: (score(c), -alts.index(c)))
+            it["points"] = best
+            if top is not None and coll in ("structures", "interfaces") and len(best) >= 3 and \
+                    (min(q[2] for q in best) + max(q[2] for q in best)) / 2 > top:  # its mid level above the ground
+                flagged.append(it["name"])
+    if flagged:
+        m["notes"].append("Read above the ground (their points may be in their surface's local coordinates): "
+                          + ", ".join(flagged[:8]) + ". The view may place them wrong; please tell the QA/QC.")
+
+
+def soil_contour(g_i):
+    """The model's soil contour (xmin, xmax, ymin, ymax) from PLAXIS, or None (QA V26.1.9 D7: the soil volume, not
+    the points and structures, says whether a result point is in the model)."""
+    try:
+        c = g_i.SoilContour
+    except Exception:  # noqa: BLE001
+        return None
+    vals = {}
+    for key in ("xmin", "xmax", "ymin", "ymax"):
+        for n in (key, key.capitalize(), key[0].upper() + key[1:3] + key[3:].capitalize(), key.upper()):
+            try:
+                v = _num(getattr(c, n))
+            except Exception:  # noqa: BLE001
+                v = None
+            if v is not None:
+                vals[key] = v
+                break
+    if len(vals) == 4 and vals["xmax"] > vals["xmin"] and vals["ymax"] > vals["ymin"]:
+        return vals
+    pts = _obj_points(c, True)
+    if len(pts) >= 3:
+        xs, ys = [q[0] for q in pts], [q[1] for q in pts]
+        if max(xs) > min(xs) and max(ys) > min(ys):
+            return {"xmin": min(xs), "xmax": max(xs), "ymin": min(ys), "ymax": max(ys)}
+    return None
+
+
 def _kind_of_material(m) -> str:
     t = (str(getattr(m, "_plx_type", "")) + " " + str(_v(getattr(m, "TypeName", "")) or "")).lower()
     for key, kind in (("soil", "soil"), ("plate", "plate"), ("embedded", "embedded_beam"), ("anchor", "anchor"),
-                      ("geogrid", "geogrid"), ("beam", "beam")):
+                      ("cable", "cable"), ("geogrid", "geogrid"), ("beam", "beam")):
         if key in t:
             return kind
     return "soil" if _num(getattr(m, "phi", None)) is not None else "plate"
@@ -239,7 +491,8 @@ def extract(s_i, g_i) -> dict:
     notes = []
     m = {"version": version, "source": "plaxis", "name": "", "points": [], "lines": [], "soil_polygons": [],
          "boreholes": [], "structures": [], "loads": [], "materials": [], "phases": [], "water": [],
-         "mesh": {"level": "Medium"}, "notes": notes}
+         "interfaces": [], "tunnels": [], "contractions": [], "wells": [], "drains": [], "clusters": [],
+         "displacements": [], "mesh": {"level": "Medium"}, "notes": notes}
     try:
         m["product"] = f"{s_i.name} {s_i.major_version}.{s_i.minor_version}"
     except Exception:  # noqa: BLE001
@@ -288,8 +541,13 @@ def extract(s_i, g_i) -> dict:
                     break
             except Exception:  # noqa: BLE001
                 continue
-        m["materials"].append({"name": _name(mat), "id": ident or _name(mat), "kind": kind, "props": props,
-                               "model": model})
+        rec = {"name": _name(mat), "id": ident or _name(mat), "kind": kind, "props": props, "model": model}
+        if kind == "soil":  # V26.1.9: the drainage type (Drained, Undrained A / B / C, Non-porous) is a variable
+            try:
+                rec["drainage"] = str(_v(mat.DrainageType))
+            except Exception:  # noqa: BLE001
+                pass
+        m["materials"].append(rec)
     mat_by = {x["name"]: x for x in m["materials"]}
 
     def mat_of(obj):
@@ -300,11 +558,47 @@ def extract(s_i, g_i) -> dict:
 
     for group, kind in (("Plates", "plate"), ("NodeToNodeAnchors", "anchor"), ("FixedEndAnchors", "anchor"),
                         ("Geogrids", "geogrid"), ("EmbeddedBeams", "embedded_beam"), ("EmbeddedBeamRows", "embedded_beam"),
-                        ("Beams", "beam")):
+                        ("Beams", "beam"), ("Cables", "cable")):  # V26.1.9: cables (PLAXIS 3D 2023.2+)
         for o in _list(g_i, group):
             parent = getattr(o, "Parent", o)
-            m["structures"].append({"kind": kind, "name": _name(o), "material": mat_of(o),
-                                    "points": _obj_points(parent, is_3d)})
+            alts = _surface_points(o, parent, is_3d)
+            m["structures"].append({"kind": kind, "name": _name(o), "material": mat_of(o), "points": alts[0],
+                                    **({"_alts": alts} if len(alts) > 1 or (is_3d and len(alts[0]) >= 3) else {})})
+    # V26.1.9 (QA/QC missing features, P1): interfaces, tunnels, contractions, wells and drains
+    for group, side in (("PositiveInterfaces", "positive"), ("NegativeInterfaces", "negative"), ("Interfaces", "")):
+        for o in _list(g_i, group):
+            if any(x["name"] == _name(o) for x in m["interfaces"]):
+                continue
+            parent = getattr(o, "Parent", o)
+            mode = ""
+            try:
+                mode = str(_v(o.MaterialMode))
+            except Exception:  # noqa: BLE001
+                pass
+            alts = _surface_points(o, parent, is_3d)
+            m["interfaces"].append({"name": _name(o), "side": side, "mode": mode, "material": mat_of(o),
+                                    "points": alts[0], **({"_alts": alts} if is_3d else {})})
+    for o in _list(g_i, "Tunnels"):
+        m["tunnels"].append({"name": _name(o)})
+    for group in ("LineContractions", "SurfaceContractions", "Contractions"):
+        for o in _list(g_i, group):
+            parent = getattr(o, "Parent", o)
+            alts = _surface_points(o, parent, is_3d)
+            m["contractions"].append({"name": _name(o), "value": _num(getattr(o, "Cref", None)),
+                                      "points": alts[0], **({"_alts": alts} if is_3d else {})})
+    for group, coll, props in (("Wells", "wells", WELL_PROPS), ("Drains", "drains", DRAIN_PROPS)):
+        for o in _list(g_i, group):
+            parent = getattr(o, "Parent", o)
+            prop = next((pr for pr in props if _num(getattr(o, pr, None)) is not None), props[0])
+            m[coll].append({"name": _name(o), "prop": prop, "value": _num(getattr(o, prop, None)),
+                            "points": _obj_points(parent, is_3d)})
+    for group, kind in DISPL_GROUPS:  # V26.1.9 (P2): prescribed displacements and their values
+        for o in _list(g_i, group):
+            props = {k: val for k, val in _numeric_attrs(o).items() if re.fullmatch(r"(?i)u[xyz](_start|_end|_ref)?", k)}
+            parent = getattr(o, "Parent", o)
+            alts = _surface_points(o, parent, is_3d)
+            m["displacements"].append({"name": _name(o), "kind": kind, "props": props, "points": alts[0],
+                                       **({"_alts": alts} if is_3d else {})})
     for group, kind in (("LineLoads", "line"), ("PointLoads", "point"), ("SurfaceLoads", "surface")):
         for o in _list(g_i, group):
             props = {}
@@ -313,9 +607,10 @@ def extract(s_i, g_i) -> dict:
                 if val is not None:
                     props[prop] = val
             parent = getattr(o, "Parent", o)
+            alts = _surface_points(o, parent, is_3d) if kind == "surface" else []
             m["loads"].append({"kind": kind, "name": _name(o), "props": props,
-                               "points": _obj_points(parent, is_3d) if kind != "point" else
-                               [q for q in [_xyz(parent, is_3d)] if q]})
+                               "points": alts[0] if alts else _obj_points(parent, is_3d) if kind != "point" else
+                               [q for q in [_xyz(parent, is_3d)] if q], **({"_alts": alts} if len(alts) > 1 else {})})
 
     # stratigraphy: boreholes and soil layer levels (Soil mode)
     try:
@@ -323,38 +618,11 @@ def extract(s_i, g_i) -> dict:
     except Exception:  # noqa: BLE001
         pass
     holes = _list(g_i, "Boreholes")
-    layers = _list(g_i, "Soillayers")
-    for bi, bh in enumerate(holes):
-        rec = {"name": _name(bh), "x": _num(bh.x) or 0.0, "y": (_num(getattr(bh, "y", None)) or 0.0) if is_3d else 0.0,
-               "head": _num(getattr(bh, "Head", None)), "layers": []}
-        for li, layer in enumerate(layers):
-            try:
-                zone = list(layer.Zones)[bi]
-            except Exception:  # noqa: BLE001
-                continue
-            top = bot = None
-            for t in (lambda z: z.Top, lambda z: z.Top.z, lambda z: z.Top.y):
-                try:
-                    top = _num(t(zone))
-                    if top is not None:
-                        break
-                except Exception:  # noqa: BLE001
-                    continue
-            for b in (lambda z: z.Bottom, lambda z: z.Bottom.z, lambda z: z.Bottom.y):
-                try:
-                    bot = _num(b(zone))
-                    if bot is not None:
-                        break
-                except Exception:  # noqa: BLE001
-                    continue
-            soil_mat = ""
-            try:
-                soil_mat = _name(_v(layer.Soil.Material))
-            except Exception:  # noqa: BLE001
-                pass
-            if top is not None and bot is not None:
-                rec["layers"].append({"name": _name(layer), "material": soil_mat, "top": top, "bottom": bot})
-        m["boreholes"].append(rec)
+    m["boreholes"] += read_boreholes(g_i, is_3d)
+    _resolve_globals(m)  # N1: after the boreholes (the ground level is known)
+    sc = soil_contour(g_i)
+    if sc:
+        m["contour"] = sc
     if not holes:
         notes.append("No boreholes found: the soil layers come from the soil polygons only.")
 
@@ -380,7 +648,9 @@ def extract(s_i, g_i) -> dict:
             if val is not None:
                 settings["Deform." + prop] = val
         m["phases"].append({"name": _name(ph), "id": str(_v(getattr(ph, "Identification", "")) or _name(ph)),
-                            "type": str(_v(getattr(ph, "DeformCalcType", "")) or ""), "settings": settings})
+                            "type": calc_type_name(getattr(ph, "DeformCalcType", "")), "settings": settings,
+                            "pore": str(_v(getattr(ph, "PorePresCalcType", "")) or ""),
+                            "thermal": str(_v(getattr(ph, "ThermalCalcType", "")) or "")})
     staged = []
     for group, kind in (("LineLoads", "line"), ("PointLoads", "point"), ("SurfaceLoads", "surface")):
         for o in _list(g_i, group):
@@ -395,7 +665,7 @@ def extract(s_i, g_i) -> dict:
                     if val is not None and val != 0:
                         staged.append({"object": _name(o), "prop": prop, "phase": _name(ph), "value": val,
                                        "unit": LOAD_UNIT.get((version, kind), ""), "kind": kind})
-    for group in ("NodeToNodeAnchors", "FixedEndAnchors"):
+    for group in ("NodeToNodeAnchors", "FixedEndAnchors", "Cables"):
         for o in _list(g_i, group):
             for ph in phases[1:]:
                 try:
@@ -407,7 +677,42 @@ def extract(s_i, g_i) -> dict:
                 if val is not None:
                     staged.append({"object": _name(o), "prop": "PrestressForce", "phase": _name(ph), "value": val,
                                    "unit": "kN", "kind": "anchor"})
+    for group, kind, props in (("Wells", "well", WELL_PROPS), ("Drains", "drain", DRAIN_PROPS),
+                               ("LineContractions", "contraction", ("Cref",)), ("SurfaceContractions", "contraction", ("Cref",)),
+                               ("Contractions", "contraction", ("Cref",))):
+        for o in _list(g_i, group):
+            for ph in phases[1:]:
+                try:
+                    if not _v(getattr(o, "Active")[ph]):
+                        continue
+                except Exception:  # noqa: BLE001
+                    continue
+                for prop in props:
+                    val = _staged(o, prop, ph)
+                    if val is not None:
+                        staged.append({"object": _name(o), "prop": prop, "phase": _name(ph), "value": val,
+                                       "unit": {"well": "m³/day", "drain": "m", "contraction": "%"}[kind], "kind": kind})
+                        break
     m["staged"] = staged
+    # V26.1.9: the stages where each structure is active (prestress of an anchor row is offered from its first one)
+    for st in m["structures"]:
+        act = []
+        for group in STRUCT_GROUPS.get(st["kind"], ()):
+            for o in _list(g_i, group):
+                n = _name(o)
+                if n != st["name"] and not n.startswith(st["name"] + "_"):
+                    continue
+                for ph in phases:
+                    try:
+                        if _v(getattr(o, "Active")[ph]) and _name(ph) not in act:
+                            act.append(_name(ph))
+                    except Exception:  # noqa: BLE001
+                        continue
+        if act:
+            order = [_name(ph) for ph in phases]
+            st["active"] = sorted(act, key=order.index)
+    # V26.1.9: the soil clusters of Staged construction (their water conditions per stage: dry, interpolate...)
+    m["clusters"] = [_name(o) for o in _list(g_i, "Soils")][:400]
     for wl in _list(g_i, "WaterLevels"):
         pts = _obj_points(wl, is_3d)
         if pts:
@@ -431,7 +736,8 @@ def finish(m: dict) -> dict:
     """Extents, the axis names and counts; also tidies an uploaded / older JSON."""
     v = m.get("version") if m.get("version") in ("2d", "3d") else "2d"
     m["version"] = v
-    for k in ("points", "lines", "soil_polygons", "boreholes", "structures", "loads", "materials", "phases", "water"):
+    for k in ("points", "lines", "soil_polygons", "boreholes", "structures", "loads", "materials", "phases", "water",
+              "interfaces", "tunnels", "contractions", "wells", "drains", "clusters", "displacements"):
         m.setdefault(k, [])
     m.setdefault("mesh", {"level": "Medium"})
     m.setdefault("notes", [])
@@ -445,6 +751,11 @@ def finish(m: dict) -> dict:
     for poly in m["soil_polygons"]:
         for q in poly["points"]:
             xs.append(q[0]), ys.append(q[1])
+    sc = m.get("contour") or {}
+    if sc.get("xmax") is not None:  # re-QA N1 / D7: the soil contour bounds the model
+        xs += [sc["xmin"], sc["xmax"]]
+        if v == "3d":
+            ys += [sc["ymin"], sc["ymax"]]
     for b in m["boreholes"]:
         xs.append(b["x"])
         for lay in b["layers"]:
@@ -545,10 +856,23 @@ def demo(version: str = "2d") -> dict:
     lines = [{"name": "Line_1", "a": "Point_5", "b": "Point_6"}, {"name": "Line_2", "a": "Point_7", "b": "Point_8"},
              {"name": "Line_3", "a": "Point_8", "b": "Point_9"}, {"name": "Line_4", "a": "Point_12", "b": "Point_13"},
              {"name": "Line_5", "a": "Point_10", "b": "Point_11"}]
+    for st in structures:  # V26.1.9: the stages where each structure is active
+        st["active"] = [f"Phase_{i}" for i in ((3, 4, 5) if st["kind"] in ("anchor", "geogrid") else (1, 2, 3, 4, 5))]
+    for mat in mats:
+        if mat["kind"] == "soil":
+            mat["drainage"] = "Undrained (A)" if mat["name"] == "Clay" else "Drained"
+            mat["props"].setdefault("Rinter", 0.67 if mat["name"] != "Sand" else 0.7)
+    interfaces = [{"name": f"{side.capitalize()}Interface_1", "side": side, "mode": "From adjacent soil", "material": "",
+                   "points": [list(q) for q in wall]} for side in ("positive", "negative")]
+    base = [[0, -dig - 0.5, 0], [xw, -dig - 0.5, 0]] if not is3 else [[0, 0, -dig - 0.5], [xw, 0, -dig - 0.5], [xw, L, -dig - 0.5], [0, L, -dig - 0.5]]
+    drains = [{"name": "Drain_1", "prop": "h", "value": -dig - 0.5, "points": base}]
     m = {"version": version, "source": "demo", "name": "Example anchored excavation",
          "product": "PLAXIS 3D (example)" if is3 else "PLAXIS 2D (example)", "points": pts, "lines": lines,
          "soil_polygons": polys, "boreholes": holes, "structures": structures, "loads": loads, "materials": mats,
          "phases": phases, "water": water, "mesh": {"level": "Medium"}, "staged": staged,
+         "interfaces": interfaces, "drains": drains, "wells": [], "tunnels": [], "contractions": [],
+         "clusters": [] if is3 else [f"Soil_{i}_1" for i in range(1, 5)],
+         "contour": {"xmin": 0.0, "xmax": W, "ymin": 0.0, "ymax": L if is3 else 0.0},
          "notes": ["Example model: PLAXIS is not connected (simulated solver). Connect PLAXIS in Settings, or upload "
                    "model.json made by plaxis_model.py, to read your own project."]}
     return finish(m)
@@ -703,10 +1027,13 @@ def describe(o: dict) -> str:
 
 
 KIND_LABEL = {"plate": "Plate", "anchor": "Anchor", "geogrid": "Geogrid", "embedded_beam": "Embedded beam",
-              "beam": "Beam", "soil": "Soil"}
+              "beam": "Beam", "soil": "Soil", "cable": "Cable"}
 
 
 SOIL_MODELS = ["MC: 2", "HS: 3", "HSsmall: 4", "SSC: 6"]  # PLAXIS SoilModel codes (V26.1.8)
+# V26.1.9 (P2): Soft Soil and Modified Cam-Clay from the same parameters; a Hoek-Brown rock to an equivalent MC
+SOIL_MODELS_P2 = ["MC: 2", "HS: 3", "HSsmall: 4", "Soft Soil: 5", "SSC: 6", "MCC: 8"]
+HB_PROPS = ("GSI", "SigmaCI", "Sigmaci", "sigmaci", "SigmaCi", "mi", "Mi")
 STIFF_PROPS = ("E50Ref", "EOedRef", "EURRef", "G0Ref", "ERef", "Eref", "E50ref", "Eoedref", "Eurref", "G0ref")
 
 
@@ -735,9 +1062,14 @@ def candidates(m: dict) -> list[dict]:
         # of Soft Soil Creep (the material becomes SSC, its other parameters from the existing ones)
         p = mat.get("props", {})
         code = str(mat.get("model") or "").strip()
-        cur = next((x for x in SOIL_MODELS if x.split(": ")[1] == code), None)
+        rock = any(k in p for k in HB_PROPS) or "hoek" in code.lower()
+        models = (["Hoek-Brown: 10", "MC (equivalent to Hoek-Brown): 2"] if rock else list(SOIL_MODELS_P2))
+        cur = next((x for x in models if x.split(": ")[1] == code or x.split(": ")[0].lower() == code.lower()), None)
         add(f"smodel:{mat['name']}", "soil", f"Soil material · {mat['name']}", f"{mat['name']} soil model",
-            f"{mat['name']}.SoilModel", "", cur or code or "", kind="values", values=list(SOIL_MODELS))
+            f"{mat['name']}.SoilModel", "", cur or code or "", kind="values", values=models)
+        dcur = _code_value(DRAINAGE_TYPES, mat.get("drainage"))  # V26.1.9: short / long term behaviour
+        add(f"drainage:{mat['name']}", "soil", f"Soil material · {mat['name']}", f"{mat['name']} drainage type",
+            f"{mat['name']}.DrainageType", "", dcur, kind="values", values=list(DRAINAGE_TYPES))
         if any(p.get(k) for k in STIFF_PROPS):  # the whole stiffness set scaled together (ratios kept valid)
             add(f"stiff:{mat['name']}", "soil", f"Soil material · {mat['name']}",
                 f"{mat['name']} stiffness set × (E50, Eoed, Eur, G0 together)", f"{mat['name']}.StiffnessFactor", "×", 1.0)
@@ -775,6 +1107,7 @@ def candidates(m: dict) -> list[dict]:
                 continue
             add(f"load:{ld['name']}.{prop}", "structures", "Loads", f"{ld['name']} {short}",
                 f"{ld['name']}.{prop}", LOAD_UNIT.get((v, ld["kind"]), ""), ld["props"][prop])
+    p1_structures(m, add)
     for ld in m["loads"]:  # the surcharge area: its edges (reduce / extend it) and each corner, even off the model points
         cs = ld.get("points") or []
         if ld["kind"] == "point" or len(cs) < 2:
@@ -839,6 +1172,8 @@ def candidates(m: dict) -> list[dict]:
             add(f"water:{b['name']}.Head", "flow", "Groundwater", f"Groundwater head at {b['name']}",
                 f"{b['name']}.Head", "m", b["head"])
 
+    p1_flow(m, add)
+
     # Staged construction: phase settings and the values that change per phase
     ids = {ph["name"]: ph.get("id") or ph["name"] for ph in m["phases"]}
     for ph in m["phases"]:
@@ -846,10 +1181,160 @@ def candidates(m: dict) -> list[dict]:
             add(f"phase:{ph['name']}.{prop}", "stages", f"Phase · {ph.get('id') or ph['name']}",
                 f"{ph['name']} {label_of(prop)}", f"{ph['name']}.{prop}", unit_of(prop, "phase", v), val)
     for sv in m.get("staged") or []:
-        add(f"staged:{sv['object']}.{sv['prop']}@{sv['phase']}", "stages", f"Phase · {ids.get(sv['phase'], sv['phase'])}",
-            f"{sv['object']} {label_of(sv['prop']) if sv['prop'] == 'PrestressForce' else sv['prop']} in {sv['phase']}",
+        named = sv["prop"] in ("PrestressForce", "Cref", "Qwell", "h") or sv.get("kind") in ("well", "drain", "contraction")
+        add(f"staged:{sv['object']}.{sv['prop']}@{sv['phase']}",
+            "flow" if sv.get("kind") in ("well", "drain") else "stages", f"Phase · {ids.get(sv['phase'], sv['phase'])}",
+            f"{sv['object']} {label_of(sv['prop']) if named else sv['prop']} in {sv['phase']}",
             f"{sv['object']}.{sv['prop']}@{sv['phase']}", sv.get("unit", ""), sv["value"])
+    p1_stages(m, add)
+    p2_candidates(m, add)
     return out
+
+
+# ---------------------------------------------------------------------------------------------------------------
+# V26.1.9: the P1 features of the QA/QC report for missing features (excavation and wall design like UA-22)
+def _code_value(values: list[str], current) -> str:
+    """The 'label: code' entry of a values list matching what PLAXIS returned (a code or a name)."""
+    cur = str(current if current is not None else "").strip().lower()
+    for x in values:
+        lab, _, code = x.rpartition(": ")
+        if cur and (cur == code or cur == lab.lower() or cur.replace(" ", "") == lab.lower().replace(" ", "").replace("(", "").replace(")", "")):
+            return x
+    return values[0]
+
+
+def _stage_phases(m: dict) -> list[dict]:
+    """The construction stages (not the initial phase, not a safety phase)."""
+    return [ph for ph in (m.get("phases") or [])[1:] if not is_safety_phase(ph)]
+
+
+def host_of(m: dict, pts: list) -> str:
+    """The structure an interface lies along (same corner points), for its label."""
+    key = lambda q: tuple(round(float(x), 4) for x in list(q)[:3])
+    mine = {key(q) for q in pts or []}
+    for st in m.get("structures") or []:
+        if mine and mine <= {key(q) for q in st.get("points") or []}:
+            return st["name"]
+    return ""
+
+
+def adjacent_soil(m: dict, itf: dict) -> str:
+    """QA V26.1.9 D4: the soil an interface 'from adjacent soil' takes its properties from: the layer at the mid level
+    of the interface (or of the structure it lies along); in 2D the soil polygon next to it on its side."""
+    pts = itf.get("points") or next((st.get("points") for st in m.get("structures") or []
+                                     if st["name"] == host_of(m, itf.get("points"))), None) or []
+    if m.get("version") != "3d" and len(pts) >= 2 and m.get("soil_polygons"):
+        (x1, y1), (x2, y2) = [(float(q[0]), float(q[1])) for q in pts[:2]]
+        mx, my = (x1 + x2) / 2, (y1 + y2) / 2
+        L = math.hypot(x2 - x1, y2 - y1) or 1.0
+        nx, ny = -(y2 - y1) / L, (x2 - x1) / L  # PLAXIS: the positive side is on the left of the line
+        sgn = -1.0 if itf.get("side") == "negative" else 1.0
+        for d in (0.05, 0.25, 1.0):
+            px, py = mx + sgn * nx * d, my + sgn * ny * d
+            for sp in m["soil_polygons"]:
+                if _inside(px, py, [(float(q[0]), float(q[1])) for q in sp.get("points") or []]):
+                    return sp.get("material") or ""
+    return soil_at(m, pts)
+
+
+def _inside(x: float, y: float, poly: list) -> bool:
+    inside = False
+    for (x1, y1), (x2, y2) in zip(poly, poly[1:] + poly[:1]):
+        if (y1 > y) != (y2 > y) and x < x1 + (y - y1) * (x2 - x1) / ((y2 - y1) or 1e-12):
+            inside = not inside
+    return inside
+
+
+def soil_at(m: dict, pts: list) -> str:
+    """The soil material at the mid level of a structure (first borehole): the interface's 'adjacent soil'."""
+    if not pts or not m.get("boreholes"):
+        return ""
+    vi = 2 if m.get("version") == "3d" else 1
+    lv = [float(q[vi]) for q in pts if len(q) > vi]
+    mid = (min(lv) + max(lv)) / 2 if lv else 0.0
+    for lay in m["boreholes"][0].get("layers") or []:
+        if lay["bottom"] - 1e-9 <= mid <= lay["top"] + 1e-9:
+            return lay.get("material") or ""
+    return ""
+
+
+def p1_structures(m: dict, add) -> None:
+    """Prestress per anchor row and stage, interface objects (own Rinter and virtual thickness), tunnel contraction."""
+    ids = {ph["name"]: ph.get("id") or ph["name"] for ph in m.get("phases") or []}
+    stages = _stage_phases(m)
+    rows: dict[str, list] = {}
+    for st in m.get("structures") or []:
+        if st["kind"] in ("anchor", "cable"):
+            rows.setdefault(st.get("material") or st["name"], []).append(st)
+    for mat, anchors in rows.items():
+        active = [n for a in anchors for n in a.get("active") or []]
+        first = next((i for i, ph in enumerate(stages) if ph["name"] in active), 0 if not active else None)
+        if first is None:
+            continue
+        for ph in stages[first:]:
+            mine = lambda o: any(o == a["name"] or o.startswith(a["name"] + "_") for a in anchors)
+            cur = next((sv["value"] for sv in m.get("staged") or [] if sv["prop"] == "PrestressForce"
+                        and sv["phase"] == ph["name"] and mine(sv["object"])), 0.0)
+            n = len(anchors)
+            add(f"prestress:{mat}@{ph['name']}", "stages", f"Anchor prestress · row {mat}",
+                f"Anchor row {mat} ({n} anchor{'s' if n > 1 else ''}) prestress in {ids.get(ph['name'], ph['name'])}",
+                "; ".join(f"{a['name']}.PrestressForce@{ph['name']}" for a in anchors), "kN", float(cur))
+    for itf in m.get("interfaces") or []:
+        host = host_of(m, itf.get("points"))
+        base = itf.get("material") if "custom" in str(itf.get("mode") or "").lower() and itf.get("material") else adjacent_soil(m, itf)
+        bmat = next((x for x in m.get("materials") or [] if x["name"] == base), {})
+        grp = f"Interface · {itf['name']}" + (f" along {host}" if host else "")
+        for prop, lab, unit, dflt in (("Rinter", "strength reduction Rinter", "-", 1.0), ("DeltaInter", "virtual thickness factor δinter", "-", 0.1)):
+            cur = (bmat.get("props") or {}).get(prop, dflt)
+            add(f"iface:{itf['name']}.{prop}", "structures", grp, f"{itf['name']}{' (' + host + ')' if host else ''} own {lab}",
+                f"{itf['name']}|{base}.iface{prop}", unit, float(cur))
+    for c in m.get("contractions") or []:
+        if c.get("value") is not None and not any(sv["object"] == c["name"] for sv in m.get("staged") or []):
+            add(f"contraction:{c['name']}", "structures", "Tunnel contraction (volume loss)", f"{c['name']} contraction Cref",
+                f"{c['name']}.Cref", "%", float(c["value"]))
+
+
+def p1_flow(m: dict, add) -> None:
+    """Water level per stage (dewatering steps), cluster water conditions, groundwater flow calculation, wells and
+    drains (dewatering design)."""
+    ids = {ph["name"]: ph.get("id") or ph["name"] for ph in m.get("phases") or []}
+    v = m.get("version")
+    head = next((b["head"] for b in m.get("boreholes") or [] if b.get("head") is not None), None)
+    if head is None and m.get("water"):
+        q = (m["water"][0].get("points") or [[0, 0, 0]])[0]
+        head = float(q[2] if v == "3d" else q[1])
+    for ph in _stage_phases(m):
+        add(f"wlevel:@{ph['name']}", "flow", "Water level per stage (dewatering)",
+            f"Phreatic level in {ids.get(ph['name'], ph['name'])} (horizontal, whole model)", f"WaterLevel.level@{ph['name']}",
+            "m", float(head if head is not None else 0.0))
+    clusters = m.get("clusters") or [p["name"] for p in m.get("soil_polygons") or []]
+    if len(clusters) <= 60:
+        for ph in _stage_phases(m):
+            for cl in clusters:
+                add(f"wcond:{cl}@{ph['name']}", "flow", f"Cluster water conditions · {ids.get(ph['name'], ph['name'])}",
+                    f"{cl} water condition in {ph['name']}", f"{cl}.WaterCondition@{ph['name']}", "",
+                    CLUSTER_CONDITIONS[0], kind="values", values=list(CLUSTER_CONDITIONS))
+    for ph in (m.get("phases") or []):
+        if is_safety_phase(ph):
+            continue
+        add(f"pore:{ph['name']}", "flow", "Groundwater flow calculation",
+            f"Pore pressure calculation in {ids.get(ph['name'], ph['name'])}", f"{ph['name']}.PorePresCalcType", "",
+            _code_value(PORE_TYPES, ph.get("pore")), kind="values", values=list(PORE_TYPES))
+    staged = {sv["object"] for sv in m.get("staged") or [] if sv.get("kind") in ("well", "drain")}
+    for coll, lab, unit in (("wells", "discharge |Qwell|", "m³/day"), ("drains", "head h", "m")):
+        for w in m.get(coll) or []:
+            if w["name"] in staged:
+                continue  # its stage values are offered under the stages (Phase · ...)
+            for ph in _stage_phases(m):
+                add(f"{coll[:-1]}:{w['name']}@{ph['name']}", "flow", f"{'Wells' if coll == 'wells' else 'Drains'} (dewatering design)",
+                    f"{w['name']} {lab} in {ids.get(ph['name'], ph['name'])}", f"{w['name']}.{w.get('prop') or ('Qwell' if coll == 'wells' else 'h')}@{ph['name']}",
+                    unit, float(w.get("value") or 0.0))
+
+
+def p1_stages(m: dict, add) -> None:
+    """The design approach of a run (EC7 partial factors on variable loads and soil strength)."""
+    add("design:approach", "stages", "Design approach (EC7 partial factors)", "Design approach of the run",
+        "Design.approach", "", DESIGN_APPROACHES[0], kind="values", values=list(DESIGN_APPROACHES))
 
 
 def apply_inputs(m: dict, variables: list[dict], inputs: dict) -> tuple[dict, list[dict], list[str]]:
@@ -1192,6 +1677,10 @@ def _svg3d(m, labels, selected, view="iso"):
 # ---------------------------------------------------------------------------------------------------------------
 # Results that can be extracted at every run (PLAXIS Output, g_o.ResultTypes.<Group>.<Type>, max absolute value at
 # nodes; "| Y = max" keeps the nodes at the top of the model, e.g. surface settlement).
+BASIC_KEYS = ("fos", "utot", "ux", "uv", "settle", "wall_ux", "plate_m", "plate_q", "plate_n", "anchor", "pile_n", "pexcess",
+              "file")  # the results of the full run of the Original File (V26.1.8)
+
+
 def outputs(version: str) -> list[dict]:
     is3 = version == "3d"
     up = "Z" if is3 else "Y"
@@ -1210,8 +1699,28 @@ def outputs(version: str) -> list[dict]:
         ("pile_n", "Max embedded beam axial force", "EmbeddedBeam.N" if is3 else "EmbeddedBeamRow.Nx2D",
          "kN", "", "report", None),
         ("pexcess", "Max excess pore pressure", "Soil.PExcess", "kN/m²", "", "report", None),
+        # V26.1.9 (QA/QC missing features, P1): structure results, groundwater flow and the surface trough
+        ("geogrid_n", "Max geogrid (grout body) axial force", "Geogrid.N1" if is3 else "Geogrid.Nx2D", "kN/m", "", "report", None),
+        ("skin", "Max embedded beam skin friction", "EmbeddedBeam.Tskin" if is3 else "EmbeddedBeamRow.Tskin2D", "kN/m", "", "report", None),
+        ("iface_sn", "Max interface effective normal stress", "Interface.InterfaceEffectiveNormalStress", "kN/m²", "", "report", None),
+        ("iface_tau", "Max interface shear stress", "Interface.InterfaceShearStress", "kN/m²", "", "report", None),
+        ("iface_rel", "Max interface relative shear stress (mobilised)", "Interface.InterfaceRelativeShearStress", "-", "", "report", None),
+        ("q", "Max specific discharge |q|", "Soil.Qtot", "m/day", "", "report", None),
+        ("head", "Max groundwater head", "Soil.GroundwaterHead", "m", "", "report", None),
+        ("psteady", "Max steady-state pore pressure", "Soil.PSteady", "kN/m²", "", "report", None),
+        ("pactive", "Max active pore pressure", "Soil.PActive", "kN/m²", "", "report", None),
+        ("trough", "Surface settlement trough volume Vs" + (" (section at mid y)" if is3 else ""),
+         f"Soil.U{up.lower()}|trough", "m³/m", "", "report", None),
+        # V26.1.9 (batch 2): the settlement and wall deflection profiles (curves in the reports), the temperature
+        ("settle_profile", "Surface settlement profile (max on the curve)", f"Soil.U{up.lower()}|profile:surface", "m", "", "report", None),
+        ("wall_profile", "Wall deflection profile ux (max on the curve)", "Plate.Ux|profile:wall", "m", "", "report", None),
+        ("temp", "Max temperature (PLAXIS Thermal)", "Soil.Temperature", "°C", "", "report", None),
         ("file", "PLAXIS project file of the run", "file", "", "", "report", None),
     ]
+    if is3:  # 3D beams: the capping beam / waling forces
+        o[-1:-1] = [("beam_n", "Max beam axial force (capping beam)", "Beam.N", "kN", "", "report", None),
+                    ("beam_m", "Max beam bending moment (capping beam)", "Beam.M2", "kN·m", "", "report", None),
+                    ("beam_m3", "Max beam bending moment M3 (capping beam)", "Beam.M3", "kN·m", "", "report", None)]
     return [{"key": k, "label": lab, "result": res, "unit": u, "phase_hint": ph, "operator": op, "value": val}
             for k, lab, res, u, ph, op, val in o]
 
@@ -1240,3 +1749,110 @@ def _main(argv=None):
 
 if __name__ == "__main__":
     _main()
+
+
+# ---------------------------------------------------------------------------------------------------------------
+# V26.1.9 (P2 of the QA/QC report for missing features): other common projects
+CALC_TYPES = ["Plastic: 0", "Consolidation: 1", "Fully coupled flow-deformation: 2"]
+INITIAL_TYPES = {"2d": ["K0 procedure: 0", "Gravity loading: 1"], "3d": ["K0 procedure: 0", "Gravity loading: 1", "Field stress: 2"]}
+THERMAL_TYPES = ["Ignore temperature: 0", "Earth gradient: 1", "Use temperatures from previous phase: 2", "Steady state thermal flow: 3"]
+DISPL_GROUPS = (("LineDisplacements", "line"), ("SurfaceDisplacements", "surface"), ("PointDisplacements", "point"))
+
+
+def _stage_label(ph: dict) -> str:
+    return str(ph.get("id") or ph["name"]).replace(":", " -")
+
+
+def p2_candidates(m: dict, add) -> None:
+    """Lengths of anchors / piles / bolts / cables, slope angle and fill height of inclined lines, the stage a soil
+    cluster is placed or excavated in (staged fill / excavation sequence), local mesh refinement, prescribed
+    displacements, the calculation type of each phase (consolidation, fully coupled), the initial stress method,
+    thermal calculation, rainfall per stage and a load factor per stage."""
+    v = m["version"]
+    vi = 2 if v == "3d" else 1
+    axes = m["axes"]
+    pts = {p["name"]: p for p in m["points"]}
+    xyz = lambda p: [float(p["x"]), float(p["y"]), float(p.get("z", 0.0))]
+    walls = {n for st in m["structures"] if st["kind"] == "plate" for n in _point_names(m, st.get("points"))}
+    ids = {ph["name"]: _stage_label(ph) for ph in m.get("phases") or []}
+    # 1. length of a two-point structure: its free end moves along the structure (the end on a wall stays)
+    for st in m["structures"]:
+        if st["kind"] not in ("anchor", "embedded_beam", "geogrid", "cable", "beam"):
+            continue
+        names = _point_names(m, st.get("points"))
+        if len(names) != 2 or len(st.get("points") or []) != 2:
+            continue
+        a, b = names if names[1] not in walls else names[::-1]  # b = the free end
+        pa, pb = xyz(pts[a]), xyz(pts[b])
+        L0 = math.dist(pa, pb)
+        if L0 < 1e-6:
+            continue
+        u = [(pb[k] - pa[k]) / L0 for k in range(3)]
+        # a grouted anchor: the grout body (geogrid / embedded beam) at the free end moves with it, its length kept
+        carried = [] if st["kind"] not in ("anchor", "cable") else \
+            [n for o in m["structures"] if o is not st and o["kind"] in ("geogrid", "embedded_beam")
+             for ends in [_point_names(m, o.get("points"))] if len(ends) == 2 and b in ends for n in ends if n != b]
+        refs = [f"{p}.{ax}+*{u[k]:.6g}~{L0:.6g}" for p in [b] + carried for k, ax in enumerate("xyz") if ax in axes and abs(u[k]) > 1e-9]
+        add(f"len:{st['name']}", "structures", "Length of anchors, piles, bolts and cables",
+            f"{st['name']} {'free ' if carried else ''}length (end {b} moves{', with the grout body' if carried else ''}; {a} stays)",
+            "; ".join(refs), "m", round(L0, 4))
+    # 2. slopes and embankments: the angle and the height of an inclined line (its toe stays)
+    on_struct = [set(_point_names(m, st.get("points"))) for st in m["structures"]]
+    for ln in m.get("lines") or []:
+        a, b = pts.get(ln.get("a")), pts.get(ln.get("b"))
+        if not a or not b:
+            continue
+        if any({ln["a"], ln["b"]} <= sp for sp in on_struct if len(sp) >= 2):
+            continue  # an anchor / strut / geogrid line is not a slope (its length is its own input)
+        pa, pb = xyz(a), xyz(b)
+        dh = math.hypot(pb[0] - pa[0], pb[1] - pa[1]) if v == "3d" else abs(pb[0] - pa[0])
+        dv = pb[vi] - pa[vi]
+        if dh < 1e-6 or abs(dv) < 1e-6 or (v == "3d" and abs(pb[1] - pa[1]) > 1e-6):
+            continue  # vertical, horizontal, or (3D) not in an x-z section
+        top, toe = (ln["b"], ln["a"]) if dv > 0 else (ln["a"], ln["b"])
+        pt, po = xyz(pts[top]), xyz(pts[toe])
+        h0, ang = abs(dv), math.degrees(math.atan2(abs(dv), dh))
+        sx = 1.0 if pt[0] > po[0] else -1.0
+        add(f"slope:{ln['name']}", "structures", "Embankments and slopes", f"{describe({'name': ln['name'], 'kind': 'line', 'points': [toe, top]})} slope angle",
+            f"{top}|{toe}.slopeangle", "°", round(ang, 3))
+        add(f"height:{ln['name']}", "structures", "Embankments and slopes",
+            f"{describe({'name': ln['name'], 'kind': 'line', 'points': [toe, top]})} height (angle kept)",
+            f"{top}.{axes[vi]}+~{h0:.6g}; {top}.x+*{sx / math.tan(math.radians(ang)):.6g}~{h0:.6g}", "m", round(h0, 4))
+    # 3. staged fill / excavation sequence: the stage a soil cluster is placed in or excavated in
+    stages = [ph for ph in (m.get("phases") or [])[1:] if not is_safety_phase(ph)]
+    clusters = m.get("clusters") or []
+    if stages and len(clusters) <= 60:
+        vals = ["as in the model: 0"] + [f"{_stage_label(ph)}: {i}" for i, ph in enumerate(stages, 1)]
+        for cl in clusters:
+            add(f"place:{cl}", "stages", "Staged fill: stage each cluster is placed in", f"{cl} placed in stage",
+                f"{cl}.PlacedIn", "", vals[0], kind="values", values=vals)
+            add(f"dig:{cl}", "stages", "Excavation sequence: stage each cluster is excavated in", f"{cl} excavated in stage",
+                f"{cl}.ExcavatedIn", "", vals[0], kind="values", values=vals)
+    # 4. local mesh refinement around a structure (coarseness factor)
+    for st in m["structures"]:
+        add(f"cf:{st['name']}", "mesh", "Local mesh refinement (coarseness factor)", f"{st['name']} coarseness factor",
+            f"{st['name']}.CoarsenessFactor", "×", 1.0)
+    # 5. prescribed displacements
+    for d in m.get("displacements") or []:
+        for prop, val in (d.get("props") or {}).items():
+            add(f"displ:{d['name']}.{prop}", "structures", "Prescribed displacements", f"{d['name']} {prop}",
+                f"{d['name']}.displ:{prop}", "m", val)
+    # 6. phases: calculation type, initial stresses, thermal, rainfall, load factor
+    ph0 = (m.get("phases") or [None])[0]
+    if ph0:
+        it = INITIAL_TYPES[v]
+        cur = next((x for x in it if x.split(":")[0].lower() in calc_type_name(ph0.get("type")).lower()), it[0])
+        add("init:calc", "stages", "Initial stresses", "Initial stress calculation (initial phase)",
+            f"{ph0['name']}.InitialCalcType", "", cur, kind="values", values=list(it))
+    for ph in stages:
+        cur = next((x for x in CALC_TYPES if x.split(":")[0].lower() in calc_type_name(ph.get("type")).lower()), CALC_TYPES[0])
+        add(f"calc:{ph['name']}", "stages", "Calculation type per stage", f"Calculation type of {ids[ph['name']]}",
+            f"{ph['name']}.CalcType", "", cur, kind="values", values=list(CALC_TYPES))
+        add(f"lfactor:@{ph['name']}", "stages", "Load factor per stage (scenarios)", f"Load factor in {ids[ph['name']]} (all loads)",
+            f"Loads.factor@{ph['name']}", "×", 1.0)
+        add(f"rain:@{ph['name']}", "flow", "Rainfall (precipitation) per stage", f"Rainfall q in {ids[ph['name']]}",
+            f"Precipitation.q@{ph['name']}", "m/day", 0.0)
+    for ph in [ph0] + stages if ph0 else []:
+        cur = next((x for x in THERMAL_TYPES if x.split(":")[0].lower() == str(ph.get("thermal") or "").lower()), THERMAL_TYPES[0])
+        add(f"thermal:{ph['name']}", "stages", "Thermal calculation (PLAXIS Thermal)", f"Thermal calculation in {ids[ph['name']]}",
+            f"{ph['name']}.ThermalCalcType", "", cur, kind="values", values=list(THERMAL_TYPES))

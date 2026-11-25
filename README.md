@@ -1,5 +1,60 @@
 # PLAXIS AI Design Automation
 
+## OPTIMUS® V26.1.9 · revised module interface, part 1 (Dr. Walid's remarks of 23 Nov 2026, A3 design Rev B)
+
+- **Switching between modules:** the module tabs are now large boxes side by side, like the Puzzle, joined by arrows. The
+  arrows show chain A (Sensitivity → Optimization → Modification → Scenarios); Calibration (chain B → Modification) and
+  Advanced reporting follow. Each box shows the state of its latest study. Hover an arrow to see what it hands over.
+- **Study plan (first page of the study page, W6.2):** the study page opens on it. Choose one module, or several modules
+  in your own order (start from chain A, chain B or an empty plan; drag ≡ or use ↑ ↓ to reorder). The plan is saved with
+  the project, and with a plan the boxes follow its order with step numbers.
+- **Design modification, many modification runs (W1.1–W1.3, W1.5, W1.6):** each item takes one or more new values (one
+  Puzzle box each). The Runs box asks for the **Number of modifications** (1–20) and how to rank them (least change that
+  meets every criterion, or largest governing margin). Modification k takes the k-th value of each item, or tick
+  **Match the puzzle** to build each package from the boxes yourself. Each modification can have a name. The results
+  show one column per modification with ✓ / ✗, change %, effect, governing margin and rank, and **Choose ★** picks the
+  one handed to Design scenarios. The figures and the Word and Excel reports follow: a modifications table, the
+  comparison, and a ranking chapter. A study saved before this version (one new value) works as before.
+- **What next? (W4.1–W4.3):** a card after the report of every module asks the next question (for optimization, in
+  Dr. Walid's words: "Would you like to proceed with Design Modification and Design Scenarios?"). The suggestions can be
+  reordered, removed or added, and the order is saved in the Study plan. The order follows the results: Optimization
+  moves up when no modification passes, and + Add new runs comes first when an optimization fails or a calibration
+  ends at the edge of its range. **Proceed** opens the next module pre-filled; **Pre-fill only** prepares it for later.
+- **Handover Optimization → Design modification (W5):** the recommended run becomes Modification 1, the interpolated
+  limit becomes Modification 2, the other passing runs become Puzzle boxes, and the targets become acceptance criteria.
+  A "Linked input" chip says where the values came from, and **Unlink** keeps them as ordinary inputs. Nothing is
+  calculated until Run is pressed. The other arrows open the next module with the results already chosen.
+- Still to come (part 2): Report All the Details, Stages to report in Advanced reporting, the Project details screen,
+  reuse of runs already calculated, and the full handovers of the other arrows (base scenario, calibrated model).
+
+## OPTIMUS® V26.1.9 (missing PLAXIS features, batch 1: the P1 items for excavation and wall design)
+
+From the QA/QC *Report for Missing Features* (24 Nov 2026). The 13 P1 items, available in every module:
+
+- **Tunnels**: Tunnel objects and contractions (line / surface) are read; the contraction Cref is a variable (per stage when staged); lining thickness and face pressure through the plate material and the face load. New results: the **surface settlement trough volume Vs** (3D: the section at mid y) and the **volume loss VL** = Vs / (π D² / 4) once the tunnel diameter is given.
+- **New structures**: an anchor row, a strut level, a plate, a geogrid, an embedded beam (3D: also a beam) drawn from two points (*PLAXIS features of the study › New structures*), with its material, the stage it is active from and an anchor prestress. Each one is a variable (not added / added) with its level shift.
+- **Anchor prestress per anchor row and stage**: the anchors of one material form a row; its prestress is offered from the first stage the row is active (Adjust prestress is switched on in that stage).
+- **Interface objects**: each interface (positive / negative) is read with the structure it lies along; its own Rinter and virtual thickness factor δinter are variables (a custom interface material copied from its material or from the adjacent soil, so the soil and the other interfaces keep theirs).
+- **Structure results**: geogrid (grout body) force, embedded beam skin friction, interface effective normal stress, shear stress and relative shear stress, 3D beam (capping beam) N, M2, M3.
+- **Water level per stage**: a horizontal phreatic level over the whole model per stage (dewatering steps), and the water condition of each soil cluster per stage (Global level, Dry, Interpolate; up to 60 clusters).
+- **Groundwater flow calculation**: the pore pressure calculation type of each phase (Phreatic, Steady-state groundwater flow, from the previous phase); results: max specific discharge |q|, groundwater head, steady and active pore pressure.
+- **Wells and drains**: read with their discharge / head; each stage's well discharge and drain head are variables.
+- **Drainage type**: Drained, Undrained (A), (B), (C), Non-porous per soil material (short / long term).
+- **Adding a safety phase**: *Factor of safety per stage* adds a safety phase after each ticked stage in every run (Run 0 included) and reads ΣMsf for each.
+- **Design approaches**: a variable per run: characteristic, EC7 DA1-C1, DA1-C2, DA2*, DA3. OPTIMUS applies the partial factors itself (variable loads × γQ, tan φ' / γφ', c' / γc', su / γcu; DA1-C1 and DA2*: structural forces × 1.35 on the effects), listed in the run's soil_models.txt.
+- **Results at chosen points**: points typed or taken from the model (e.g. a building corner) give |u|, ux and uz (2D: uy) at the point; with *Results over time*, at every stage.
+- **Dynamic loads**: a dynamic phase after a chosen stage, harmonic, on a chosen load or as a shaking of the model base, with viscous boundaries; amplitude, frequency and duration are variables; results: ax, vx and ux in the dynamic phase. Needs PLAXIS with the Dynamics module.
+
+**In every module** (Sensitivity, Optimization, Scenarios, Calibration, Design modification, Advanced reporting): the new inputs are variables in section 2 (and Puzzle boxes), the new results are control parameters, targets, measured results, acceptance criteria and reported results in section 1 (Sensitivity Detector included); the factor of safety after each ticked stage is a main result of its own (summary, charts, comparison, statistics). The Word and Excel reports list the study's PLAXIS features, the interfaces / tunnels / wells / drains of the model, the drainage type of each soil and what each run set in PLAXIS (sheet *PLAXIS features*); the added phases are named (safety phase after …, dynamic phase). The 3D / 2D view and the report's model geometry draw the new structures (translucent / dashed, "added"), the result points and the wells and drains; a run's details list what it set in the stages.
+
+Also: what each run set in the stages is kept in stages_applied.txt; a variable with fewer values than runs (e.g. not added / added in 4 runs) spreads its values over the runs (it stopped the study with an error). The full run of the Original File reads the same results as V26.1.8 (the new results are chosen in the studies).
+
+**QA/QC after editing (Ashraf, 24 Nov 2026), corrective actions:** D1 the factor of safety is read from safety phases whose calculation type PLAXIS gives as a number (7 = safety; 1 K0, 4 plastic), a model's own safety phases included; D2 the results page of a study with added safety phases opens; D3 a study that adds a safety or dynamic phase calculates Run 0 too, the dynamic results are read without ticking them and a licence without Dynamics is said plainly; D4 an interface 'from adjacent soil' copies the soil layer next to it (shown in the input's name); D5 the pore pressure type is set with PLAXIS' own token, a refusal says the licence may not allow it; D6 |q| = √(qx² + qy² + qz²) when PLAXIS has no Qtot; D7 result points are checked before the runs (outside the model, above the ground, on a structure) and a point on the surface is read 1 cm inside; D8 a failed run keeps what it set in PLAXIS and the PLAXIS code is said in words (101 soil body collapse…); D9 a result point gives |u| without ticking it; D14 the features are grouped under *PLAXIS features* in section 2 and interfaces and tunnel contractions are drawn in the 3D / 2D view.
+
+**Re-QA/QC of the corrective actions (Ashraf, 25 Nov 2026):** N2 only an error of the link to PLAXIS (connection lost, timeout, a file locked by OneDrive) is retried; a collapse (LogInfo 101), a value PLAXIS refuses ('Incorrect new value'), a missing material or any other error is given at once, and a phase failure that PLAXIS raises from `calculate` is still said in words from its LogInfo; N1 the points of a PLAXIS 3D surface (plate, interface, surface load, contraction, prescribed displacement) are read in model coordinates through the surface's origin and local axes; of the possible readings the one that meets the anchors / beams and lies in the ground is kept, and a surface still read above the ground is said in the model notes (read the model again after installing); D4 follows from N1, and at run time the interface's soil is looked for in every reading of its place; D5 the pore pressure type of a phase now reaches its own command (a misspelt property name had sent it to the plain PLAXIS set); D7 the soil contour of the model (and the borehole layers for z), not the points and structures, says whether a result point is outside the model; N3 the model check matches a staged load by its prefix (SurfaceLoad_1_1); N4 the every-run table wraps its headers.
+
+**Through the PLAXIS scripting API, with limits**: earthquake records (table signals) are not in this batch (harmonic only); tunnel round length and support delay are not variables (the Tunnel Designer's excavation sequence is not reachable as single values through the scripting server); the total inflow into an excavation through a cross-section is not given by the scripting server (the max specific discharge and the well discharges are). The PLAXIS commands were written from the PLAXIS 2D / 3D reference manuals and checked with a simulated PLAXIS; each feature needs one check on PLAXIS 3D 2024.3 / 2025.1 (QA/QC).
+
 ## OPTIMUS® V26.1.8 (QA/QC review of the five study modules)
 
 - **PLAXIS 3D results are read again**: PLAXIS Output is opened with the security it really has (secured or not); before, a secured request to an unsecured Output server failed on every result ("Syntax of request could not be understood") and the study still said "succeeded". PLAXIS 3D 2024 names are used (wall axial force `Plate.N11`, anchor force `NodeToNodeAnchor.N`), with alternatives for other versions.

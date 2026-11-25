@@ -14,7 +14,7 @@ summary, a table of three columns and figures. Excel and Word files are made by 
 """
 import math
 
-from . import geocheck, geosel, plaxis_model
+from . import features, geocheck, geosel, plaxis_model
 from .planner import numeric, parse_value, show
 
 MODES = {
@@ -32,19 +32,25 @@ MODES = {
                   "hint": "Calculate the existing design once and report its results in full detail."},
 }
 DOMAINS = {"geometry": "Geometry", "structures": "Structures", "loads": "Loads", "soil": "Soil",
-           "water": "Water conditions", "mesh": "Mesh", "stages": "Stages"}
+           "water": "Water conditions", "mesh": "Mesh", "stages": "Stages", "thermal": "Thermal",
+           "features": "PLAXIS features"}
 OUT_DOMAINS = {"safety": "Safety", "displacements": "Displacements", "forces": "Structural forces",
-               "water": "Pore pressure"}
+               "water": "Pore pressure and flow", "points": "Results at chosen points", "dynamics": "Dynamics",
+               "thermal": "Thermal"}
 OPERATORS = [">=", "<=", ">", "<"]
 
 
 def domain_of(c: dict) -> str:
     k = c["key"]
-    if k.startswith(("pt:", "move:", "geo:", "area:", "corner:")) or (k.startswith("del:") and c.get("group") == "Remove a point"):
+    if k.startswith(("pt:", "move:", "geo:", "area:", "corner:", "slope:", "height:", "len:")) or (k.startswith("del:") and c.get("group") == "Remove a point"):
         return "geometry"  # the surcharge area is geometry (Area / Line), its values stay under Loads
     if k.startswith("load:"):
         return "loads"
-    return {"soil": "soil", "flow": "water", "mesh": "mesh", "stages": "stages"}.get(c["section"], "structures")
+    if k.startswith("thermal:"):
+        return "thermal"
+    if k.startswith(("prestress:", "design:", "iface:", "add:", "addshift:", "dyn:", "contraction:")):
+        return "features"  # QA V26.1.9 D14: the PLAXIS features of the study grouped in section 2
+    return {"soil": "soil", "flow": "water", "mesh": "mesh", "stages": "stages", "thermal": "thermal"}.get(c["section"], "structures")
 
 
 def geo_kind(c: dict, m: dict, kinds: dict) -> str | None:
@@ -60,7 +66,7 @@ def geo_kind(c: dict, m: dict, kinds: dict) -> str | None:
     if k.startswith("move:"):
         o = kinds.get(k[5:].rsplit(".", 1)[0]) or {}
         return "area" if m.get("version") == "3d" and len(o.get("points") or []) > 2 else "line"
-    if k.startswith("geo:"):
+    if k.startswith(("geo:", "slope:", "height:", "len:")):
         return "line"
     if k.startswith("layer:"):
         return "volume"
@@ -76,14 +82,24 @@ def out_domain(key: str) -> str | None:
         return "forces"
     if key == "pexcess":
         return "water"
-    return None
+    return features.out_domain(key)  # V26.1.9
 
 
-def catalog(m: dict) -> dict:
+def all_candidates(m: dict, s: dict | None = None) -> list[dict]:
+    """The model's input parameters and those of the study's PLAXIS features (V26.1.9: new structures, dynamics)."""
+    return plaxis_model.candidates(m) + features.candidates(m, s or {})
+
+
+def all_outputs(m: dict, s: dict | None = None) -> list[dict]:
+    """PLAXIS' results and those of the study's features (V26.1.9: results at chosen points, volume loss, dynamics)."""
+    return plaxis_model.outputs(m["version"]) + features.outputs(m, s or {})
+
+
+def catalog(m: dict, s: dict | None = None) -> dict:
     """Everything the study page offers: the model's input parameters and PLAXIS' outputs, by domain."""
     params = []
     kinds = {o["name"]: o for o in plaxis_model.objects(m)}
-    for c in plaxis_model.candidates(m):
+    for c in all_candidates(m, s):
         p = {"key": c["key"], "label": c["label"], "unit": c.get("unit") or "", "current": c["current"],
              "kind": c["kind"], "domain": domain_of(c), "group": c["group"], "ref": c["plaxis_ref"]}
         gk = geo_kind(c, m, kinds)
@@ -98,10 +114,15 @@ def catalog(m: dict) -> dict:
         if c["kind"] == "values":  # the soil model (V26.1.8)
             p["values"] = c.get("values") or []
         params.append(p)
-    outs = [{**o, "domain": out_domain(o["key"])} for o in plaxis_model.outputs(m["version"]) if out_domain(o["key"])]
+    outs = [{**o, "domain": out_domain(o["key"])} for o in all_outputs(m, s) if out_domain(o["key"])]
     phases = [{"name": name, "label": lab, "day": d} for name, (d, lab) in schedule(m, {}).items()]
+    allph = [{"name": ph["name"], "label": ph.get("id") or ph["name"], "type": plaxis_model.calc_type_name(ph.get("type")) if ph.get("type") not in (None, "") else ""}
+             for ph in (m.get("phases") or [])]
+    mats = [{"name": x["name"], "id": x.get("id") or x["name"], "kind": x["kind"]} for x in m.get("materials") or []]
     return {"modes": MODES, "domains": DOMAINS, "out_domains": OUT_DOMAINS, "operators": OPERATORS,
-            "params": params, "outputs": outs, "phases": phases}
+            "params": params, "outputs": outs, "phases": phases, "all_phases": allph, "materials": mats,
+            "loads": [x["name"] for x in m.get("loads") or []], "kinds": features.KINDS,
+            "has": {k: len(m.get(k) or []) for k in ("interfaces", "tunnels", "contractions", "wells", "drains")}}
 
 
 def default(mode: str) -> dict:
@@ -195,20 +216,46 @@ def _encode(var: dict, val):
 
 
 def _phase_for(o: dict, m: dict) -> str:
+    if o.get("phase_hint") == "dynamic":
+        return features.DYNAMIC_PHASE
     if o.get("phase_hint") == "safety":
-        return next((ph["name"] for ph in m.get("phases") or [] if "safety" in f"{ph.get('type', '')} {ph.get('id', '')}".lower()), "")
+        return next((ph["name"] for ph in m.get("phases") or [] if plaxis_model.is_safety_phase(ph)), "")
     return ""
+
+
+MAX_MODS = 20  # Rev B W1.3: Number of modifications, 1 to 20
+
+
+def new_values(p: dict) -> list:
+    """Design modification: the new values of an item (one Puzzle box each). "news" is the list; "new" (one value) is
+    how a study saved before Rev B gave it, and stays the first value."""
+    vals = p.get("news")
+    if not isinstance(vals, list) or not [x for x in vals if x not in (None, "")]:
+        vals = [p.get("new")]
+    return [x for x in vals if x not in (None, "")]
+
+
+def _dc_value(var: dict, x):
+    if var["kind"] == "values":
+        return next((v for v in var["values"] if v.split(":")[0].strip().lower() == str(x).split(":")[0].strip().lower()), None)
+    return _f(x)
+
+
+def mod_count(s: dict, longest: int) -> int:
+    """The number of modifications: the one asked for in the Runs box, else one per new value of the longest item."""
+    n = int(_f(s.get("mods")) or 0) or longest
+    return max(1, min(MAX_MODS, n))
 
 
 def build(m: dict, study: dict) -> dict:
     """Variables, targets and runs of the study, the scheduled runs (3 columns) and what is still missing."""
     s = clean(study)
-    cands = {c["key"]: c for c in plaxis_model.candidates(m)}
+    cands = {c["key"]: c for c in all_candidates(m, s)}
     for e in s.get("geo") or []:  # geometry selected in the 3D view (app.geosel)
         c = geosel.candidate(m, e, e.get("mode") or "x")
         if c:
             cands[c["key"]] = c
-    outs = {o["key"]: o for o in plaxis_model.outputs(m["version"])}
+    outs = {o["key"]: o for o in all_outputs(m, s)}
     errors, variables, params, warnings = [], [], [], []
     geo = {"grp:" + e["id"]: e for e in s.get("geo") or [] if e.get("id")}
     screen = s.get("screen") or {}
@@ -298,7 +345,7 @@ def build(m: dict, study: dict) -> dict:
     else:
         for key in s["outputs"]:
             add_target(key)
-        if mode == "design_change":  # QA V26.1.8: optional acceptance criteria of the modified design
+        if mode in ("design_change", "combinations"):  # acceptance criteria / scenario targets (Rev B: D1, QA D10)
             for c in s.get("criteria") or []:
                 val = _f(c.get("value"))
                 t = next((t for t in targets if t["key"] == c.get("output")), None)
@@ -336,16 +383,44 @@ def build(m: dict, study: dict) -> dict:
                 at(sr["output"], dd, name, lab, {"measured": v, "read_day": d})
         done = {sr["output"] for sr in series}
         keys = [k for k in (tm.get("outputs") or list(dict.fromkeys(t["key"] for t in targets if not t.get("time"))))
-                if k in outs and k not in ("fos", "file") and k not in done]
+                if k in outs and k not in ("fos", "file") and k not in done and not k.startswith("dyn_")]
         if tm.get("on"):
             for key in keys:
                 for d, name, lab in dates:
                     at(key, d, name, lab)
         if series and not any(t.get("measured") is not None and not t.get("time") for t in targets):
             errors[:] = [e for e in errors if "measured result" not in e]
+    # QA V26.1.9 D3 / D9: a result point and the dynamic phase give their results without ticking them separately
+    if mode != "calibration" and not screening:
+        fo0 = features.clean(s)
+        have = {t["key"] for t in targets}
+        auto = [f"probe{i}:utot" for i in range(len(fo0["probes"])) if not any(k.startswith(f"probe{i}:") for k in have)]
+        if fo0["dynamic"]["on"] and not any(k.startswith("dyn_") for k in have):
+            auto += ["dyn_ax", "dyn_ux"]
+        for key in auto:
+            add_target(key, extra={"auto": True})
+        warnings += features.probe_checks(m, s)  # QA V26.1.9 D7: each result point checked before the runs
+        if auto:
+            warnings.append("Read as well (PLAXIS features of the study): " + ", ".join(outs[k]["label"] for k in auto if k in outs) + ".")
     # QA V26.1.8: a factor of safety needs a safety phase. Without one PLAXIS gives ΣMsf = 1 for the last phase, which
     # was reported as "FoS 1" (reporting) or failed every optimization run after 10 minutes of calculation.
-    has_safety = any("safety" in f"{ph.get('type', '')} {ph.get('id', '')}".lower() for ph in m.get("phases") or [])
+    # V26.1.9: a safety phase added by OPTIMUS after chosen stages: the factor of safety of each of those stages
+    fo = features.clean(s)
+    after = [ph for ph in (m.get("phases") or []) if ph["name"] in fo["safety"]["after"]]
+    if after:
+        fos = [t for t in targets if t["key"] == "fos" and not t.get("time")]
+        proto = fos[0] if fos else None
+        targets[:] = [t for t in targets if not (t["key"] == "fos" and not t.get("time"))]
+        o = outs["fos"]
+        for ph in after:
+            targets.append({"name": f"T{len(targets) + 1}", "label": f"{o['label']} after {ph.get('id') or ph['name']}",
+                            "result": o["result"], "phase": features.SAFETY_PHASE + ph["name"],
+                            "operator": proto["operator"] if proto else "report", "value": proto.get("value") if proto else None,
+                            "unit": o["unit"], "key": "fos", "safety_after": ph["name"],  # a main result (not a stage value): it is a control / target
+                            **({k: proto[k] for k in ("how", "ref", "lo", "hi", "control", "measured", "detector") if k in proto} if proto else {})})
+        for i, t in enumerate(targets, 1):
+            t["name"] = f"T{i}"
+    has_safety = bool(after) or any(plaxis_model.is_safety_phase(ph) for ph in m.get("phases") or [])
     if m.get("phases") and not has_safety and any(t["key"] == "fos" for t in targets):
         if any(t["key"] == "fos" and t["operator"] != "report" for t in targets) or mode == "calibration":
             errors.append("The factor of safety needs a safety phase, and this model has none: add a safety phase in "
@@ -360,7 +435,7 @@ def build(m: dict, study: dict) -> dict:
         runs.append({"label": "Existing design", "inputs": {}})
     n_var = n - (1 if base else 0)  # "runs" is the total number of runs, Run 0 included
     pz = s.get("puzzle") or {}
-    puzzle = bool(pz.get("on")) and mode not in ("design_change", "reporting") and not screening
+    puzzle = bool(pz.get("on")) and mode != "reporting" and not screening  # Rev B W1.1: the Puzzle in Design modification too
     factorial = mode == "combinations" and bool(s.get("factorial"))
     if not puzzle and not screening and not factorial and mode not in ("design_change", "reporting") and params and n_var < (len(params) if mode == "sensitivity" else 1):
         errors.append(f"{n} run(s) in total is too few: give at least {(len(params) if mode == 'sensitivity' else 1) + (1 if base else 0)}.")
@@ -386,19 +461,27 @@ def build(m: dict, study: dict) -> dict:
                 if val is not None:
                     runs.append({"label": f"{var['label']} = {value_text(var, val)}",
                                  "inputs": {var["name"]: _encode(var, val)}})
+    elif mode == "design_change" and puzzle:
+        pass  # the modifications are the packages of Puzzle boxes (Match the puzzle, below)
     elif mode == "design_change":
-        ins = {}
+        # Rev B W1.3 (Walid, 23 Nov 2026: "keep the option for Many Modification Runs"): each item has one or more new
+        # values (one Puzzle box each); Modification k takes the k-th new value of every item that has one. With
+        # Match the puzzle, each modification is the package of boxes dropped into it instead (below).
+        cols = []
         for p, var in params:
-            new = p.get("new")
-            if var["kind"] == "values":
-                new = next((v for v in var["values"] if v.split(":")[0].strip() == str(new).split(":")[0].strip()), None)
-            else:
-                new = _f(new)
-            if new is None:
+            vals = [v for v in (_dc_value(var, x) for x in new_values(p)) if v is not None]
+            if not vals:
                 errors.append(f"Give the new value of {var['label']}.")
                 continue
-            ins[var["name"]] = _encode(var, new)
-        runs.append({"label": "Modified design", "inputs": ins})
+            cols.append((var, vals))
+        n_mod = mod_count(s, max((len(v) for _, v in cols), default=1))
+        for k in range(n_mod):
+            ins = {var["name"]: _encode(var, vals[k]) for var, vals in cols if k < len(vals)}
+            if ins:
+                runs.append({"label": f"Modification {k + 1}", "inputs": ins})
+            elif cols:
+                errors.append(f"Modification {k + 1} has no change: give each item a value for it, or lower the number of "
+                              "modifications.")
     elif mode == "reporting":
         pass  # the existing design only (Run 0)
     elif mode == "combinations" and s.get("factorial") and params:
@@ -419,6 +502,10 @@ def build(m: dict, study: dict) -> dict:
             runs.append({"label": f"Scenario {k + 1}", "inputs": {var["name"]: _encode(var, v) for (var, _), v in zip(cols, combo)}})
     else:  # optimization (together, n runs) and scenarios (n scenarios)
         cols = [(var, param_values(p, var, max(0, n_var), s["distribution"])) for p, var in params]
+        # V26.1.9: a variable with fewer values than runs (e.g. "not added / added" in 4 runs) spreads its values over
+        # the runs (it gave fewer values than runs, and the runs after them failed with an IndexError)
+        cols = [(var, vals if len(vals) >= n_var or not vals else
+                 [vals[round(k * (len(vals) - 1) / max(1, n_var - 1))] for k in range(n_var)]) for var, vals in cols]
         for k in range(max(0, n_var)):
             ins = {var["name"]: _encode(var, vals[k]) for var, vals in cols if vals[k] is not None}
             if ins:
@@ -441,9 +528,11 @@ def build(m: dict, study: dict) -> dict:
                 if v is not None:
                     ins[var["name"]] = _encode(var, v)
             if ins:
-                runs.append({"label": run_values(ins, vmap), "inputs": ins})
+                runs.append({"label": f"Modification {len(runs) + (0 if base else 1)}" if mode == "design_change"
+                             else run_values(ins, vmap), "inputs": ins})
         if len(runs) == (1 if base else 0) and params:
-            errors.append("Drag the puzzle boxes into the runs (Match the puzzle), or untick Match the puzzle.")
+            errors.append("Drag the puzzle boxes into the " + ("modifications" if mode == "design_change" else "runs")
+                          + " (Match the puzzle), or untick Match the puzzle.")
     # a run customized in "Visualize proposed runs": {run number: {parameter item: value}}
     by_item = {var["item"]: var for _, var in params}
     over = s.get("over") or {}
@@ -463,6 +552,12 @@ def build(m: dict, study: dict) -> dict:
     confirmed = {str(x) for x in s.get("confirmed") or []}
     for i, r in enumerate(runs):
         r["key"] = i if base else i + 1  # the run's number before deletions: Confirm / Customize refer to it
+    if mode == "design_change":  # Rev B W1.2a: each modification has a name of its own, carried to results and report
+        names = s.get("names") or {}
+        for r in runs:
+            if r["key"] and str(names.get(str(r["key"])) or "").strip():
+                r["name"] = str(names[str(r["key"])]).strip()[:60]
+                r["label"] = f"{r['label']} · {r['name']}"  # the name is kept with the run (its label)
     order = {str(k): i for i, k in enumerate(s.get("order") or [])}  # runs moved earlier / later by hand
     if order:
         runs.sort(key=lambda r: (0 if base and r["key"] == 0 else 1, order.get(str(r["key"]), len(order) + r["key"])))
@@ -471,7 +566,7 @@ def build(m: dict, study: dict) -> dict:
     runs = [r for r in runs if r not in deleted]
     rows = [{"run": i if base else i + 1, "key": r["key"], "sig": run_sig(r["inputs"]),
              "values": run_values(r["inputs"], vmap) or "Existing design",
-             "inputs": r["inputs"], "label": r["label"], "custom": bool(r.get("custom")),
+             "inputs": r["inputs"], "label": r["label"], "name": r.get("name") or "", "custom": bool(r.get("custom")),
              "confirmed": str(r["key"]) in confirmed, "moves": geosel.displace(m, variables, r["inputs"])}
             for i, r in enumerate(runs)]
     # the geometry of each run checked before PLAXIS: overlapping lines, no length left, items changed indirectly
@@ -498,7 +593,7 @@ def schedule(m: dict, tm: dict) -> dict:
     given = (tm or {}).get("days") or {}
     out, d = {}, 0.0
     for ph in (m.get("phases") or [])[1:]:
-        if "safety" in f"{ph.get('type', '')} {ph.get('id', '')}".lower():
+        if plaxis_model.is_safety_phase(ph):
             continue
         g = _f(given.get(ph["name"]))
         d = g if g is not None else d + 30.0
@@ -775,7 +870,10 @@ def missing_results(targets: list[dict], runs: list[dict]) -> list[dict]:
         why = {m.split(": ")[0]: m.split(": ", 1)[1] if ": " in m else "" for m in (r.get("outputs") or {}).get("_missing") or []}
         for t in targets:
             if not _isnum((r.get("outputs") or {}).get(t["name"])) and t["result"].lower() != "file":
-                e = out.setdefault(t["label"], {"label": t["label"], "runs": [], "reason": why.get(t["label"], "not read")})
+                w = why.get(t["label"], "not read")
+                if "could not convert string to float" in w:  # V26.1.8: PLAXIS returned text (no values at this stage)
+                    w = "not active at this stage (PLAXIS returned no values)"
+                e = out.setdefault(t["label"], {"label": t["label"], "runs": [], "reason": w})
                 e["runs"].append(r.get("no"))
     return list(out.values())
 
@@ -841,32 +939,8 @@ def results(task: dict, runs: list[dict], previous: list[dict] | None = None) ->
         for row, r in zip(rows, allruns):
             row["achievement"] = achievement(targets, r["outputs"]) if r["status"] == "succeeded" else None
             row["margin"] = round(gov(r), 1) if r["status"] == "succeeded" else None
-    # QA V26.1.8: the existing design is the run without inputs and the modified one the run with them (before: the
-    # first and last succeeded runs, so a failed Run 0 compared the modified design with itself)
-    old = next((r for r in ok if not r.get("inputs")), None)
-    new = next((r for r in reversed(ok) if r.get("inputs")), None)
-    if mode == "design_change" and old and new:
-        out["comparison"] = [{"label": t["label"], "unit": t["unit"], "key": t.get("key"), "old": (old["outputs"] or {}).get(t["name"]),
-                              "new": (new["outputs"] or {}).get(t["name"]), "operator": t["operator"], "limit": t.get("value")}
-                             for t in main_t if isinstance((new["outputs"] or {}).get(t["name"]), (int, float))]
-        better = worse = 0
-        for c, t in zip(out["comparison"], [t for t in main_t if isinstance((new["outputs"] or {}).get(t["name"]), (int, float))]):
-            o, nw = c["old"], c["new"]
-            c["change"] = (nw - o) / abs(o) * 100 if isinstance(o, (int, float)) and o else None
-            if isinstance(o, (int, float)) and abs(nw - o) > 1e-9 * max(1.0, abs(o)):
-                low = t.get("key") in LOWER_IS_BETTER
-                c["effect"] = "improves" if (nw < o) == low else "worsens"
-                better += c["effect"] == "improves"
-                worse += c["effect"] == "worsens"
-            else:
-                c["effect"] = "no change"
-            c["meets_old"], c["meets_new"] = _meets(t, o), _meets(t, nw)
-        crit = [c for c in out["comparison"] if c["meets_new"] is not None]
-        out["verdict"] = {"improves": better, "worsens": worse, "criteria": len(crit),
-                          "meets": all(c["meets_new"] for c in crit) if crit else None,
-                          "failing": [c["label"] for c in crit if not c["meets_new"]]}
-    elif mode == "design_change" and not (old and new):
-        out["verdict"] = {"incomplete": "the existing" if not old else "the modified"}
+    if mode == "design_change":
+        modification_results(out, plan, s, main_t, ok, allruns, vmap)
     if mode == "calibration":
         fits = []
         for row, r in zip(rows, allruns):
@@ -902,11 +976,12 @@ def results(task: dict, runs: list[dict], previous: list[dict] | None = None) ->
         st = [t for t in targets if t.get("stage")]
         if st and ok:
             o0 = ok[0]["outputs"] or {}
-            phases = list(dict.fromkeys(t["phase_label"] for t in st))
+            lab = lambda t: t.get("phase_label") or t.get("phase") or "last phase"  # QA V26.1.9 D2: no KeyError
+            phases = list(dict.fromkeys(lab(t) for t in st))
             tab = {}
             for t in st:
                 e = tab.setdefault(t["key"], {"label": t.get("base_label") or t["label"], "unit": t["unit"], "values": {}})
-                e["values"][t["phase_label"]] = o0.get(t["name"])
+                e["values"][lab(t)] = o0.get(t["name"])
             out["stages"] = {"phases": phases, "rows": list(tab.values())}
     out["stats"] = statistics(main_t, ok)
     if any(t.get("time") for t in targets):  # V26.1.8: every chosen result over time (stage dates, long term)
@@ -919,6 +994,107 @@ def results(task: dict, runs: list[dict], previous: list[dict] | None = None) ->
         out["screen"] = screening_rank(plan, allruns)
     out["text"] = summary_text(out, plan, ok, allruns)
     return out
+
+
+def change_size(inputs: dict, vmap: dict) -> float:
+    """How far a modification is from the existing design: the sum of |Δx / x| of its numeric inputs (a change of a
+    level, a model or a structure counts 1). Used to rank by "least change that meets every criterion"."""
+    tot = 0.0
+    for name, val in (inputs or {}).items():
+        var = vmap.get(name) or {}
+        v = val[0] if isinstance(val, (list, tuple)) and val and var.get("kind") != "values" else val
+        cur = _f(var.get("current"))
+        if var.get("kind") != "values" and _isnum(v) and cur:
+            tot += abs(float(v) - cur) / abs(cur)
+        elif var.get("kind") != "values" and _isnum(v) and cur == 0:
+            tot += abs(float(v))
+        else:
+            tot += 1.0
+    return tot
+
+
+def _compare(main_t: list[dict], old: dict, new: dict) -> tuple[list[dict], int, int]:
+    """Every result of one modification against the existing design: value, change %, effect and criterion."""
+    rows, better, worse = [], 0, 0
+    for t in main_t:
+        nw = (new["outputs"] or {}).get(t["name"])
+        if not isinstance(nw, (int, float)):
+            continue
+        o = (old["outputs"] or {}).get(t["name"]) if old else None
+        c = {"label": t["label"], "unit": t["unit"], "key": t.get("key"), "name": t["name"], "old": o, "new": nw,
+             "operator": t["operator"], "limit": t.get("value")}
+        c["change"] = (nw - o) / abs(o) * 100 if isinstance(o, (int, float)) and o else None
+        if isinstance(o, (int, float)) and abs(nw - o) > 1e-9 * max(1.0, abs(o)):
+            low = t.get("key") in LOWER_IS_BETTER
+            c["effect"] = "improves" if (nw < o) == low else "worsens"
+            better += c["effect"] == "improves"
+            worse += c["effect"] == "worsens"
+        else:
+            c["effect"] = "no change"
+        c["meets_old"], c["meets_new"] = _meets(t, o), _meets(t, nw)
+        c["margin"] = margin(t, nw)
+        rows.append(c)
+    return rows, better, worse
+
+
+RANK_RULES = {"least": "least change that meets every criterion", "margin": "largest governing margin"}
+
+
+def modification_results(out: dict, plan: dict, s: dict, main_t: list[dict], ok: list[dict], allruns: list[dict],
+                         vmap: dict) -> None:
+    """Rev B W1.5 (Walid, 23 Nov 2026: Many Modification Runs): the existing design (Run 0) against every modification,
+    one column each, with its verdict, governing margin and rank; the chosen one (★, rank 1 by default) is the one
+    handed to Design scenarios. out["comparison"] / out["verdict"] stay those of the chosen modification."""
+    # QA V26.1.8: the existing design is the run without inputs (a failed Run 0 must not compare a design with itself)
+    old = next((r for r in ok if not r.get("inputs")), None)
+    mods = [r for r in allruns if r.get("inputs")]
+    rule = s.get("rank") if s.get("rank") in RANK_RULES else "least"
+    checked = [t for t in main_t if t["operator"] != "report" and t.get("value") is not None]
+    out["rank_rule"] = {"key": rule, "text": RANK_RULES[rule]}
+    out["existing"] = {"run": old["no"] if old else None,
+                       "meets": all(_meets(t, (old["outputs"] or {}).get(t["name"])) for t in checked) if old and checked else None,
+                       "values": {t["name"]: (old["outputs"] or {}).get(t["name"]) for t in main_t} if old else {},
+                       "margin": min((x for x in (margin(t, (old["outputs"] or {}).get(t["name"])) for t in checked) if x is not None),
+                                     default=None) if old and checked else None}
+    cols = []
+    for k, r in enumerate(mods, 1):
+        name = r.get("name") or (str(r.get("label") or "").split(" · ", 1)[1] if " · " in str(r.get("label") or "") else "")
+        col = {"run": r["no"], "key": r.get("key"), "no": k, "name": name,
+               "title": f"Modification {k}" + (f" · {name}" if name else ""),
+               "values": run_values(r["inputs"], vmap), "status": r["status"], "size": round(change_size(r["inputs"], vmap), 4)}
+        if r["status"] == "succeeded" and old:
+            rows, better, worse = _compare(main_t, old, r)
+            crit = [c for c in rows if c["meets_new"] is not None]
+            margins = [c["margin"] for c in rows if c["margin"] is not None and c["meets_new"] is not None]
+            col.update({"results": rows, "improves": better, "worsens": worse, "criteria": len(crit),
+                        "meets": all(c["meets_new"] for c in crit) if crit else None,
+                        "failing": [c["label"] for c in crit if not c["meets_new"]],
+                        "margin": round(min(margins), 1) if margins else None})
+        cols.append(col)
+    done = [c for c in cols if "results" in c]
+
+    def key(c):
+        passes = c["meets"] is not False
+        if rule == "margin":
+            return (0 if passes else 1, -(c["margin"] if c["margin"] is not None else -1e9), c["size"])
+        if c["meets"] is None:  # no criterion: the most results improved, then the least change
+            return (0, -(c["improves"] - c["worsens"]), c["size"])
+        return (0 if passes else 1, c["size"] if passes else -(c["margin"] if c["margin"] is not None else -1e9), c["no"])
+    for i, c in enumerate(sorted(done, key=key), 1):
+        c["rank"] = i
+    chosen = next((c for c in done if str(c["run"]) == str(s.get("chosen"))), None) or next((c for c in done if c.get("rank") == 1), None)
+    for c in cols:
+        c["chosen"] = c is chosen
+    out["modifications"] = cols
+    if not old or not done:
+        out["verdict"] = {"incomplete": "the existing" if not old else "the modified"}
+        return
+    out["comparison"] = chosen["results"]
+    out["verdict"] = {"improves": chosen["improves"], "worsens": chosen["worsens"], "criteria": chosen["criteria"],
+                      "meets": chosen["meets"], "failing": chosen["failing"], "chosen": chosen["run"],
+                      "chosen_title": chosen["title"], "passing": sum(1 for c in done if c["meets"] is True),
+                      "calculated": len(done), "total": len(cols)}
+
 
 
 def detector(plan: dict, stats: list[dict], runs: list[dict]) -> list[dict]:
@@ -937,7 +1113,7 @@ def detector(plan: dict, stats: list[dict], runs: list[dict]) -> list[dict]:
     rows = [{**st, "driver": drivers.get(st["label"], ("", 0))[0], "key": keys.get(st["label"]),
              "control": keys.get(st["label"]) in ctl} for st in stats if st.get("spread") is not None]
     rows.sort(key=lambda r: -abs(r["spread"]))
-    return rows[:10]
+    return rows[:10] + [r for r in rows[10:] if r["control"]]  # V26.1.9: the control parameters are always shown
 
 
 def screening_rank(plan: dict, runs: list[dict]) -> list[dict]:
@@ -991,6 +1167,8 @@ def statistics(targets: list[dict], ok: list[dict]) -> list[dict]:
 
 
 def _short(t: dict) -> str:
+    if t.get("safety_after"):  # V26.1.9: the factor of safety after a chosen stage
+        return t["label"].replace("Factor of safety", "FoS")
     return {"fos": "FoS", "utot": "|u|", "ux": "ux", "uv": "u vert.", "settle": "settlement", "wall_ux": "wall ux",
             "plate_m": "M", "plate_q": "Q", "plate_n": "N", "anchor": "anchor F", "pile_n": "pile N",
             "pexcess": "p excess"}.get(t.get("key"), t["label"])
@@ -1029,6 +1207,8 @@ def _summary_text(out: dict, plan: dict, ok: list, allruns: list) -> str:
                 + ". Widen the ranges or add new runs." + lim)
     if mode == "design_change" and out.get("verdict", {}).get("incomplete"):
         return head + f" No comparison: {out['verdict']['incomplete']} design was not calculated."
+    if mode == "design_change" and out.get("comparison") and len(out.get("modifications") or []) > 1:
+        return many_text(out)
     if mode == "design_change" and out.get("comparison"):
         parts = [f"{c['label']} {fmt(c['old'])} → {fmt(c['new'])}{(' ' + c['unit']) if c['unit'] else ''}"
                  + (f" ({c['change']:+.1f} %, {c['effect']})" if c.get("change") is not None else "") for c in out["comparison"]]
@@ -1071,6 +1251,27 @@ def _summary_text(out: dict, plan: dict, ok: list, allruns: list) -> str:
                                       for st in out["stats"]) + "." + (
             f" Every result is also given at each of the {len(out['stages']['phases'])} stages." if out.get("stages") else "")
     return head
+
+
+def many_text(out: dict) -> str:
+    """Rev B W1.5: the verdict line over every modification."""
+    v, cols, ex = out["verdict"], out["modifications"], out.get("existing") or {}
+    done = [c for c in cols if "results" in c]
+    txt = f"The existing design is compared with {len(cols)} modifications ({len(done)} calculated)."
+    if any(c["meets"] is not None for c in done):
+        txt += f" {v['passing']} of {len(done)} meet every acceptance criterion"
+        txt += "; the existing design does not." if ex.get("meets") is False else "; so does the existing design." if ex.get("meets") else "."
+    best = next((c for c in done if c.get("rank") == 1), None)
+    if best:
+        ch = "; ".join(f"{x['label']} {x['change']:+.1f} %" for x in best["results"] if x.get("change") is not None)
+        txt += (f" Rank 1 ({out['rank_rule']['text']}): {best['title']} ({best['values']})"
+                + (f": {ch}" if ch else "") + (f", governing margin {best['margin']:+.1f} %" if best.get("margin") is not None else "") + ".")
+    ch = next((c for c in done if c["chosen"]), None)
+    if ch and best and ch is not best:
+        txt += f" Chosen by the engineer: {ch['title']} (rank {ch['rank']})."
+    if v.get("meets") is False:
+        txt += " The chosen modification does NOT meet: " + ", ".join(v["failing"]) + "."
+    return txt
 
 
 def sens_summary(plan: dict, runs: list[dict]) -> list[dict]:
@@ -1191,7 +1392,24 @@ def chart_specs(task: dict, out: dict, runs_all: list[dict]) -> list[dict]:
                               if _isnum(t.get("measured")) else f"{t['label']} in every run", "target": t,
                               "points": pts, "best": c.get("best_run"), "measured": t.get("measured")})
     elif mode == "design_change":
-        if out.get("comparison"):
+        done = [c for c in out.get("modifications") or [] if "results" in c]
+        if len(done) > 1:  # Rev B W1.5: one grouped bar chart per result, existing grey, modifications blue, criterion dashed
+            ex = (out.get("existing") or {}).get("values") or {}
+            for t in [t for t in plan["targets"] if not t.get("stage")]:
+                bars = [(c["title"].replace("Modification ", "Mod "), next((x["new"] for x in c["results"] if x["name"] == t["name"]), None),
+                         c["chosen"]) for c in done]
+                bars = [b for b in bars if _isnum(b[1])]
+                if bars:
+                    specs.append({"kind": "compare_many", "title": f"{t['label']}: existing design and every modification",
+                                  "target": t, "existing": ex.get(t["name"]), "bars": bars,
+                                  "limit": t.get("value") if t["operator"] != "report" else None})
+            specs.append({"kind": "change_heat", "title": "Change of every result in every modification (% against the existing design)",
+                          "rows": [x["label"] for x in done[0]["results"]],
+                          "cols": [c["title"].replace("Modification ", "Mod ") for c in done],
+                          "values": [[next((x["change"] for x in c["results"] if x["label"] == lab), None) for c in done]
+                                     for lab in [x["label"] for x in done[0]["results"]]],
+                          "lower": [x.get("key") in LOWER_IS_BETTER for x in done[0]["results"]]})
+        elif out.get("comparison"):
             specs.append({"kind": "compare", "title": "Existing and modified design", "items": out["comparison"]})
     else:
         for t in [t for t in plan["targets"] if not t.get("stage")]:
@@ -1204,6 +1422,19 @@ def chart_specs(task: dict, out: dict, runs_all: list[dict]) -> list[dict]:
                               "points": pts, "best": gv["governing_run"] if gv else None, "scenario": mode == "combinations"})
     best = (out.get("calibration") or {}).get("best_run") if mode == "calibration" else \
         (out.get("optimization") or {}).get("best_run") if mode == "optimize" else None
+    for t in plan["targets"]:  # V26.1.9 (batch 2): the settlement / wall deflection profile, one line per run
+        if "|profile" not in (t.get("result") or "") or t.get("time"):
+            continue
+        rs = [r for r in runs_all if r["status"] == "succeeded" and ((r.get("outputs") or {}).get("_profiles") or {}).get(t["name"])]
+        if not rs:
+            continue
+        keep = rs if len(rs) <= 8 else [r for i, r in enumerate(rs) if i == 0 or r["no"] == best or i % max(1, len(rs) // 7) == 0][:9]
+        specs.append({"kind": "profile", "title": t["label"].split(" (max")[0] + " in " +
+                      ("every run" if len(keep) == len(rs) else f"{len(keep)} of the {len(rs)} runs"),
+                      "target": t, "along": "wall" if "profile:wall" in t["result"] else "surface",
+                      "series": [{"label": f"Run {r['no']}" + (" (existing design)" if not r.get("inputs") else ""),
+                                  "run": r["no"], "points": r["outputs"]["_profiles"][t["name"]], "best": r["no"] == best,
+                                  "existing": not r.get("inputs")} for r in keep]})
     for ts in out.get("time") or []:  # V26.1.8: each result over time, one line per run (+ the field readings)
         specs.append({"kind": "time", "title": f"{ts['label']} over time" + (" against the field readings" if ts["measured"] else ""),
                       "target": {"label": ts["label"], "unit": ts["unit"]}, "measured": ts["measured"],
