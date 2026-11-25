@@ -49,7 +49,7 @@ def domain_of(c: dict) -> str:
         return "loads"
     if k.startswith("thermal:"):
         return "thermal"
-    if k.startswith(("prestress:", "design:", "iface:", "add:", "addshift:", "dyn:", "contraction:")):
+    if k.startswith(("prestress:", "design:", "iface:", "add:", "addshift:", "dyn:", "contraction:", "collapse:")):
         return "features"  # QA V26.1.9 D14: the PLAXIS features of the study grouped in section 2
     return {"soil": "soil", "flow": "water", "mesh": "mesh", "stages": "stages", "thermal": "thermal"}.get(c["section"], "structures")
 
@@ -192,7 +192,7 @@ def value_list(p: dict) -> list | None:
     return [_r(v) for v in vals if v is not None]
 
 
-def undrained_note(m: dict, mat_name: str) -> str:
+def undrained_note(m: dict, mat_name: str, study: dict | None = None) -> str:
     """A soil that drains freely (a sand or gravel: by its name, its permeability or c' = 0 with a high φ') switched to
     Undrained in a plastic excavation: PLAXIS often finds no equilibrium (LogInfo 101, 'soil body collapse'), as in the
     QA runs on UA-22 (L2 medium dense sand, Undrained (A), Anchor Excavation)."""
@@ -211,7 +211,17 @@ def undrained_note(m: dict, mat_name: str) -> str:
     return (f"{lab} drains freely (a sand or gravel): switched to Undrained it builds excess pore pressures in every "
             "plastic phase, and PLAXIS may find no equilibrium (soil body collapse, LogInfo 101) in an excavation phase. "
             "Excavation in sand is drained in practice; for a short-term check use a Consolidation calculation for the "
-            "excavation phases (calculation type in Variable inputs) or Undrained (B) with a measured su.")
+            "excavation phases (calculation type in Variable inputs) or Undrained (B) with a measured su."
+            + _collapse_text(study))
+
+
+def _collapse_text(study: dict | None) -> str:
+    """V26.1.9: what OPTIMUS does when such a phase collapses (PLAXIS features of the study › Undrained collapse)."""
+    from . import features
+    c = features.clean(study or {})["collapse"]
+    return (f" If a Plastic phase collapses, OPTIMUS calculates it again once as Consolidation over {c['days']:g} days "
+            "and flags it in the run record and the report." if c["on"] else
+            " Recalculating a collapsed Plastic phase as Consolidation is switched off: such a run fails.")
 
 
 def param_values(p: dict, var: dict, n: int, distribution: str) -> list:
@@ -304,7 +314,7 @@ def build(m: dict, study: dict) -> dict:
         params.append((p, var))
     for p, var in params:  # V26.1.9 (QA runs on UA-22): an undrained switch of a permeable soil in an excavation
         if str(p.get("item") or "").startswith("drainage:"):
-            w = undrained_note(m, p["item"][len("drainage:"):])
+            w = undrained_note(m, p["item"][len("drainage:"):], study)
             if w:
                 warnings.append(w)
     if screening:  # Sensitivity Detector of the inputs: each item changed alone by the same step

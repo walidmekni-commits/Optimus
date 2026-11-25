@@ -1352,14 +1352,14 @@ def p1_structures(m: dict, add) -> None:
     for itf in m.get("interfaces") or []:
         host = host_of(m, itf.get("points"))
         custom = "custom" in str(itf.get("mode") or "").lower() and itf.get("material")
-        bases = [itf["material"]] if custom else adjacent_soils(m, itf)  # E1: one copy per adjacent layer
+        bases = [itf["material"]] if custom else adjacent_soils(m, itf)  # E1: the layers along it
         mats = {x["name"]: x for x in m.get("materials") or []}
         bmat = mats.get(bases[0], {}) if bases else {}
         ids = ", ".join(mats.get(b, {}).get("id") or b for b in bases)
         grp = f"Interface · {itf['name']}" + (f" along {host}" if host else "")
         for prop, lab, unit, dflt in (("Rinter", "strength reduction Rinter", "-", 1.0), ("DeltaInter", "virtual thickness factor δinter", "-", 0.1)):
             cur = (bmat.get("props") or {}).get(prop, dflt)
-            per = f" (its material {ids})" if custom else (f" (per layer: {ids})" if len(bases) > 1 else f" ({ids})" if ids else "")
+            per = f" (its material {ids})" if custom else (f" (along {ids}: a copy of the layer at its mid level)" if len(bases) > 1 else f" ({ids})" if ids else "")
             add(f"iface:{itf['name']}.{prop}", "structures", grp, f"{itf['name']}{' (' + host + ')' if host else ''} own {lab}{per}",
                 f"{itf['name']}|{','.join(bases)}.iface{prop}", unit, float(cur))
     for c in m.get("contractions") or []:

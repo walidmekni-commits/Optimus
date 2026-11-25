@@ -752,6 +752,72 @@ class PlaxisSolver(P1Mixin, P2Mixin):
 
     LONGTERM_ID = "Long term"
 
+    @staticmethod
+    def _undrained_a(g_i) -> bool:
+        """A soil material of the model is Undrained (A) (True when PLAXIS does not say)."""
+        try:
+            mats = list(g_i.Materials)
+        except Exception:  # noqa: BLE001
+            return True
+        for m in mats:
+            try:
+                d = str(getattr(getattr(m, "DrainageType", None), "value", getattr(m, "DrainageType", "")))
+            except Exception:  # noqa: BLE001
+                continue
+            if re.search(r"(?i)undrained\s*\(?a|^1$", d.strip()):
+                return True
+        return False
+
+    def _retry_collapse(self, g_i, days: float, calc_err, say=lambda *a: None):
+        """V26.1.9 (Walid 25 Nov 2026; QA on UA-22 run_002, PLAXIS 3D 2024.3): a Plastic phase that collapses
+        (LogInfo 101, soil body collapse) with an Undrained (A) soil: more steps, iterations or a looser tolerance still
+        stop at ΣMstage 0.83 and arc-length control is refused, while the same phase as Consolidation calculates. That
+        phase is calculated again once as Consolidation over `days`; the others are kept. Returns (what was done,
+        the calculation error)."""
+        done, tried = [], set()
+        if not self._undrained_a(g_i):
+            return done, calc_err
+        for _ in range(len(list(g_i.Phases))):
+            ph = None
+            for p in g_i.Phases:
+                info = str(getattr(getattr(p, "LogInfo", None), "value", "0") or "0").strip()
+                if info in ("0", ""):
+                    continue
+                kind = str(getattr(getattr(p, "DeformCalcType", None), "value", getattr(p, "DeformCalcType", ""))).lower()
+                if info == "101" and "plastic" in kind and _obj_name(p) not in tried:
+                    ph = p
+                break  # the first failed phase only: the ones after it were not calculated
+            if ph is None:
+                break
+            name = str(getattr(getattr(ph, "Name", None), "value", "") or _obj_name(ph))
+            tried.add(_obj_name(ph))
+            _try(g_i, "gotostages")
+            for how in (lambda: setattr(ph, "DeformCalcType", "consolidation"),
+                        lambda: g_i.set(ph.DeformCalcType, "Consolidation")):
+                try:
+                    how()
+                    break
+                except Exception:  # noqa: BLE001
+                    continue
+            else:
+                break
+            for how in (lambda: setattr(ph, "TimeInterval", float(days)), lambda: g_i.set(ph.TimeInterval, float(days))):
+                try:
+                    how()
+                    break
+                except Exception:  # noqa: BLE001
+                    continue
+            done.append(f"{name} recalculated as Consolidation ({days:g} days) because undrained plastic collapsed "
+                        "(LogInfo 101)")
+            say(f"{name} collapsed (undrained, Plastic): calculating it again as Consolidation ({days:g} days)", 60)
+            self._mark_phases(g_i)
+            try:
+                g_i.calculate()
+                calc_err = None
+            except Exception as e:  # noqa: BLE001
+                calc_err = e
+        return done, calc_err
+
     def _add_longterm(self, g_i, days: float) -> str:
         """V26.1.8: a consolidation phase of `days` after the last construction stage (not a safety phase), so the
         results can be read one year (or any time) after the works. Returns its name."""
@@ -835,6 +901,7 @@ class PlaxisSolver(P1Mixin, P2Mixin):
         # V26.1.9: features applied after the variables (water levels and conditions per stage, interfaces with their
         # own material, design approach, new structures, the dynamic load)
         levels, conds, ifaces, design, adds, dyn, staged_done = {}, [], {}, 0, {}, dict(self.dynamic or {}), []
+        collapse_days = None
         p2 = new_p2()  # V26.1.9 (batch 2): slopes, staged fill / excavation, mesh refinement, phase settings
         is3 = path.suffix.lower() in (".p3d", ".p3dxml")
         first = lambda v: 0 if any(r.strip().lower().endswith((".soilmodel", ".sscmu", ".stiffnessfactor")) for r in (v.plaxis_ref or "").split(";")) else 1
@@ -904,6 +971,9 @@ class PlaxisSolver(P1Mixin, P2Mixin):
                     continue
                 if obj_name == "Design" and pl == "approach":  # V26.1.9: EC7 design approach
                     design = int(round(value))
+                    continue
+                if obj_name == "Collapse" and pl == "days":  # V26.1.9: consolidation time after an undrained collapse
+                    collapse_days = value
                     continue
                 if obj_name == "Dynamic":  # V26.1.9: amplitude / frequency / duration of the dynamic phase
                     dyn[pl] = value
@@ -1029,6 +1099,16 @@ class PlaxisSolver(P1Mixin, P2Mixin):
             calc_err = None
         except Exception as e:  # noqa: BLE001 - PLAXIS 3D can raise when a phase fails: its LogInfo says why (N2, D8)
             calc_err = e
+        cl = dict(getattr(self, "collapse", None) or {})
+        retried = []
+        if cl.get("on"):
+            days = float(collapse_days if collapse_days is not None else cl.get("days") or 7.0)
+            retried, calc_err = self._retry_collapse(g_i, days, calc_err, say)
+            if retried:
+                staged_done += retried
+                self.last_applied["_stages_applied"] = list(staged_done)
+                self.last_applied["_collapse_retry"] = list(retried)
+                (run_dir / "stages_applied.txt").write_text("\n".join(staged_done), encoding="utf-8")
         say("Checking the phases and saving the run", 85)
         for p in g_i.Phases:
             info = str(getattr(getattr(p, "LogInfo", None), "value", "0") or "0")
@@ -1042,7 +1122,9 @@ class PlaxisSolver(P1Mixin, P2Mixin):
                     kept = f" The PLAXIS file of this run is kept to look at the mechanism: {failed_file.name}."
                 except Exception:  # noqa: BLE001
                     pass
-                raise SolverError(f"Phase {p.Name.value} failed: {why}.{kept}")
+                again = (" It had been recalculated as Consolidation after an undrained collapse: "
+                         + "; ".join(retried) + ".") if retried else ""
+                raise SolverError(f"Phase {p.Name.value} failed: {why}.{again}{kept}")
         if calc_err is not None:
             raise calc_err
 
@@ -1053,6 +1135,8 @@ class PlaxisSolver(P1Mixin, P2Mixin):
         if soil_models:
             out["_soil_models"] = soil_models
             (run_dir / "soil_models.txt").write_text("\n".join(soil_models), encoding="utf-8")
+        if retried:  # V26.1.9: flagged in the run record and the report
+            out["_collapse_retry"] = retried
         if staged_done:  # V26.1.9: what was set in the stages (prestress, water, new structures, added phases)
             out["_stages_applied"] = staged_done
             (run_dir / "stages_applied.txt").write_text("\n".join(staged_done), encoding="utf-8")

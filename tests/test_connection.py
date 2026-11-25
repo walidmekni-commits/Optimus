@@ -531,3 +531,18 @@ def test_win32_expert_filled_only_when_opened(monkeypatch):
     G.LOG.clear()
     assert G.open_dialog(1, Main()) == "DLG"
     assert any(x.startswith("win32: clicking Configure remote scripting") for x in G.LOG)
+
+
+def test_locked_screen_is_said_plainly(pc, monkeypatch):
+    """Re-test of 9be0a91: with the PC screen locked every window route fails ('no active desktop'): OPTIMUS says to
+    unlock the screen, not to close a message in PLAXIS."""
+    monkeypatch.setattr(L, "running_inputs", lambda: [{"pid": 8720, "name": "Plaxis3DInput.exe", "title": "PLAXIS 3D"}])
+    monkeypatch.setattr(L.subprocess, "Popen", lambda *a, **k: pytest.fail("PLAXIS is open: no second one"))
+
+    def start(pid, progress=None, want_port=0):
+        L.LAST["error"] = "RuntimeError: There is no active desktop required for moving mouse cursor!"
+        return {"ok": False, "error": L.LAST["error"]}
+    monkeypatch.setattr(L, "gui_start_server", start)
+    with pytest.raises(L.ConnectError) as e:
+        L.connect("3d")
+    assert "Unlock the PC screen" in str(e.value) and "close any open message" not in str(e.value)

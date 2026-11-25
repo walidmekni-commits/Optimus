@@ -70,7 +70,21 @@ def clean(s: dict) -> dict:
     if out["dynamic"]["signal"] == "record" and out["dynamic"]["record"]:
         out["dynamic"]["duration"] = _f(d.get("duration")) or out["dynamic"]["record"][-1][0]
     out["tunnel"] = {"d": _f((s.get("tunnel") or {}).get("d"))}
+    # V26.1.9 (Walid 25 Nov 2026, QA on UA-22): a Plastic phase that collapses (LogInfo 101) with an Undrained (A) soil
+    # is calculated again once as Consolidation over a time interval (7 days by default). On unless switched off.
+    c = s.get("collapse") or {}
+    days = _f(c.get("days"))
+    out["collapse"] = {"on": c.get("on") is not False, "days": days if days and days > 0 else COLLAPSE_DAYS}
     return out
+
+
+COLLAPSE_DAYS = 7.0
+
+
+def undrained_in(m: dict, s: dict) -> bool:
+    """The model has an Undrained (A) soil, or the study switches a soil's drainage type."""
+    return any(re.search(r"(?i)undrained\s*\(?a", str(x.get("drainage") or "")) for x in (m or {}).get("materials") or []) or \
+        any(str(p.get("item") or "").startswith("drainage:") for p in (s or {}).get("params") or [])
 
 
 def record(text) -> list[list[float]]:
@@ -139,6 +153,9 @@ def candidates(m: dict, s: dict) -> list[dict]:
             "Dynamic.amplitude", unit, d["amplitude"], section="stages")
         add("dyn:frequency", "Dynamic load", "Dynamic frequency (harmonic)", "Dynamic.frequency", "Hz", d["frequency"], section="stages")
         add("dyn:duration", "Dynamic load", "Dynamic time interval", "Dynamic.duration", "s", d["duration"], section="stages")
+    if o["collapse"]["on"] and undrained_in(m, s):
+        add("collapse:days", "Undrained collapse", "Consolidation time of a Plastic phase recalculated after an undrained "
+            "collapse (LogInfo 101)", "Collapse.days", "day", o["collapse"]["days"], section="stages")
     return out
 
 
@@ -194,7 +211,8 @@ def solver_options(m: dict, s: dict) -> dict:
     names = [ph["name"] for ph in m.get("phases") or []]
     return {"safety_after": [x for x in o["safety"]["after"] if x in names],
             "additions": {sp["name"]: sp for sp in (added_spec(m, a) for a in o["added"]) if sp},
-            "dynamic": o["dynamic"] if o["dynamic"]["on"] and o["dynamic"]["after"] in names else None}
+            "dynamic": o["dynamic"] if o["dynamic"]["on"] and o["dynamic"]["after"] in names else None,
+            "collapse": o["collapse"]}
 
 
 def describe(m: dict, s: dict) -> list[list[str]]:
@@ -235,6 +253,11 @@ def describe(m: dict, s: dict) -> list[list[str]]:
                          f"{d['frequency']:g} Hz, {d['duration']:g} s, viscous boundaries"])
     if (o["tunnel"] or {}).get("d"):
         rows.append(["Tunnel diameter (volume loss)", f"D = {o['tunnel']['d']:g} m"])
+    if undrained_in(m or {}, s or {}):
+        cl = o["collapse"]
+        rows.append(["Undrained collapse", f"a Plastic phase that collapses (LogInfo 101) with an Undrained (A) soil is "
+                     f"calculated again once as Consolidation over {cl['days']:g} days (flagged in the run record)"
+                     if cl["on"] else "off: a Plastic phase that collapses with an Undrained (A) soil fails the run"])
     return rows
 
 

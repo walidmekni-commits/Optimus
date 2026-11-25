@@ -314,6 +314,9 @@ WRONG_PW = re.compile(r"(?i)decrypt|encrypt|password|authenticat|unauthori[sz]|f
                       r"expecting value|json|decode")
 
 
+LOCKED = re.compile(r"(?i)no active desktop|desktop is locked|workstation is locked|screen is locked")
+
+
 class WrongPassword(Exception):
     pass
 
@@ -478,6 +481,11 @@ def connect(version: str = "3d", progress=lambda msg: None, should_stop=lambda: 
             _remember_exe(proc["pid"])
             return r
         why = LAST["error"]
+        if LOCKED.search(str(why)):  # re-test of 9be0a91: the screen was locked, no click is possible in PLAXIS
+            raise ConnectError(
+                f"PLAXIS Input is open{' (' + proc['title'] + ')' if proc['title'] else ''} but the PC screen is locked, "
+                "so OPTIMUS cannot use PLAXIS' menu to switch its scripting server on. Unlock the PC screen (keep it "
+                "unlocked while OPTIMUS connects), then press Try again.")
         raise ConnectError(
             f"PLAXIS Input is open{' (' + proc['title'] + ')' if proc['title'] else ''} but the app could not switch "
             f"its scripting server on ({why}). In PLAXIS close any open message, then press Try again.")

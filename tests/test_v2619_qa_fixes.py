@@ -375,7 +375,7 @@ def test_e1_interface_soils_per_layer_offered():
     assert len(soils) >= 2 and soils == [l_["material"] for l_ in sorted(m["boreholes"][0]["layers"], key=lambda x: -x["top"])
                                          if l_["material"] in soils]
     c = next(c for c in plaxis_model.candidates(m) if c["key"] == f"iface:{itf['name']}.Rinter")
-    assert "per layer:" in c["label"] and ",".join(soils) in c["plaxis_ref"]
+    assert "a copy of the layer at its mid level" in c["label"] and ",".join(soils) in c["plaxis_ref"]
 
 
 def _iface_pc(levels):
@@ -423,25 +423,15 @@ def _iface_pc(levels):
     return g, mats, made, boreholes
 
 
-def test_e1_several_layers_no_soil_copies(monkeypatch):
-    """Re-test of d5016d6: soil copies per layer made PLAXIS 24.3 fail at gotostages (ShearStrengthDepthDependency).
-    Along several layers, even when the pieces' levels are known, the adjacent soils take the values: no copies."""
+def test_e1_several_layers_one_copy_of_the_mid_layer(monkeypatch):
+    """Re-tests of d5016d6 and 9be0a91: one copy per layer, and the values set on the soils themselves, both made PLAXIS
+    24.3 fail at gotostages. Along several layers: one copy of the layer at the interface's mid level (eb9ec48)."""
     g, mats, made, bh = _iface_pc([0.5, -3.0, -8.25])
     monkeypatch.setattr(plaxis_model, "read_boreholes", bh)
     done = solver(g)._interfaces(g, {"PositiveInterface_1|L1Sand,L2Sand,L3Sandstone": {"Rinter": 0.5}})
-    assert not made and all(x.Rinter == 0.5 for x in mats.values())
-    assert g.PositiveInterface_1.MaterialMode == "From adjacent soil"
-    assert "set on each adjacent layer (L1Sand, L2Sand, L3Sandstone)" in done[0]
-
-
-def test_e1_without_piece_levels_the_adjacent_soils_take_rinter(monkeypatch):
-    g, mats, made, bh = _iface_pc([None, None, None])
-    monkeypatch.setattr(plaxis_model, "read_boreholes", bh)
-    done = solver(g)._interfaces(g, {"PositiveInterface_1|L1Sand,L2Sand,L3Sandstone": {"Rinter": 0.5}})
-    assert not made and all(x.Rinter == 0.5 and x.props.get("InterfaceStrengthDetermination") == "Manual"
-                            for x in mats.values())
-    assert g.PositiveInterface_1.MaterialMode == "From adjacent soil"
-    assert "set on each adjacent layer (L1Sand, L2Sand, L3Sandstone)" in done[0]
+    assert len(made) == 1 and made[0].Rinter == 0.5 and made[0].phi == 34.0  # mid level -4.75 m: L2Sand
+    assert all(x.Rinter == 0.67 for x in mats.values())  # the soils themselves are not changed
+    assert "a copy of the adjacent soil L2Sand" in done[0] and "L1Sand, L2Sand, L3Sandstone" in done[0]
 
 
 # Walid / Ashraf: the run that always fails at "Anchor Excavation" (L2 medium dense sand switched to Undrained (A))
@@ -462,3 +452,67 @@ def test_undrained_sand_said_before_and_after_the_run():
     clay = study.build(m, {"mode": "combinations", "params": [{"item": "drainage:Clay", "how": "list", "list": "Drained: 0"}],
                            "outputs": ["utot"], "runs": 1})
     assert not any("drains freely" in w for w in clay["warnings"])
+
+
+# Walid 25 Nov 2026 (QA on UA-22 run_002): a Plastic phase that collapses with an Undrained (A) soil is calculated
+# again once as Consolidation (7 days by default), flagged in the run record and the report
+def test_undrained_collapse_recalculated_as_consolidation():
+    import types
+    from app import exports, features
+    from app.solvers import PlaxisSolver
+
+    class V:
+        def __init__(self, v):
+            self.value = v
+
+    class Ph:
+        def __init__(self, name, kind):
+            self.Name, self.DeformCalcType, self.LogInfo, self.ShouldCalculate = V(name), V(kind), V("0"), True
+            self.TimeInterval = None
+
+        def __setattr__(self, k, v):
+            object.__setattr__(self, k, V(v) if k in ("DeformCalcType", "TimeInterval") and not isinstance(v, V) and v is not None else v)
+    p1, p3 = Ph("Phase_1", "Plastic"), Ph("Phase_3", "Plastic")
+    calls = []
+
+    def calculate():
+        calls.append(1)
+        p3.LogInfo = V("101" if p3.DeformCalcType.value == "Plastic" else "0")
+        if p3.LogInfo.value != "0":
+            raise RuntimeError("Phase_3 failed")
+    g = types.SimpleNamespace(Phases=[p1, p3], Materials=[types.SimpleNamespace(DrainageType=V("Undrained (A)"))],
+                              calculate=calculate, gotostages=lambda: None)
+    solver = PlaxisSolver.__new__(PlaxisSolver)
+    try:
+        calculate()
+        err = None
+    except RuntimeError as e:
+        err = e
+    done, err = solver._retry_collapse(g, 7.0, err)
+    assert err is None and p3.DeformCalcType.value == "consolidation" and p3.TimeInterval.value == 7.0
+    assert done == ["Phase_3 recalculated as Consolidation (7 days) because undrained plastic collapsed (LogInfo 101)"]
+    assert len(calls) == 2 and p1.DeformCalcType.value == "Plastic"
+
+    # no undrained soil: nothing is changed
+    p3.DeformCalcType, p3.LogInfo = "Plastic", V("101")
+    g.Materials = [types.SimpleNamespace(DrainageType=V("Drained"))]
+    assert solver._retry_collapse(g, 7.0, None)[0] == [] and p3.DeformCalcType.value == "Plastic"
+
+    # the study: on by default, its time interval a variable, described, and the runs flagged in the report
+    m = {"version": "3d", "materials": [{"name": "L2", "drainage": "Undrained (A)"}], "phases": []}
+    assert features.clean({})["collapse"] == {"on": True, "days": 7.0}
+    assert features.solver_options(m, {})["collapse"] == {"on": True, "days": 7.0}
+    c = [x for x in features.candidates(m, {}) if x["key"] == "collapse:days"]
+    assert c and c[0]["plaxis_ref"] == "Collapse.days" and c[0]["current"] == 7.0
+    assert not [x for x in features.candidates(m, {"collapse": {"on": False}}) if x["key"] == "collapse:days"]
+    assert any("Consolidation over 7 days" in r[1] for r in features.describe(m, {}))
+    runs = [{"no": 2, "outputs": {"_collapse_retry": done, "_stages_applied": ["x"] + done}}]
+    assert exports.collapse_rows(runs) == [["Run 2", done[0]]]
+    assert exports.stages_rows(runs)[1][1].startswith("⚠ Phase_3 recalculated")
+
+
+def test_undrained_warning_says_what_happens_on_collapse():
+    from app import study
+    m = {"materials": [{"name": "L2MedDenseSand", "props": {"phi": 34, "cref": 0}}]}
+    assert "calculates it again once as Consolidation over 7 days" in study.undrained_note(m, "L2MedDenseSand", {})
+    assert "switched off" in study.undrained_note(m, "L2MedDenseSand", {"collapse": {"on": False}})

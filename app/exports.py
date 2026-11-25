@@ -387,7 +387,9 @@ def excel(project: dict, task: dict, out: dict, runs_all: list[dict], figs: list
     if fr or sr or model_objects(m):  # V26.1.9: the study's PLAXIS features and what each run set in the stages
         ws4 = wb.create_sheet("PLAXIS features")
         r = 1
-        for title, hdr, rows in (("PLAXIS features of the study", ["Feature", "Setting"], fr),
+        for title, hdr, rows in (("⚠ Phases recalculated as Consolidation (undrained Plastic collapse)", ["Run", "Recalculated"],
+                                  collapse_rows(runs_all)),
+                                 ("PLAXIS features of the study", ["Feature", "Setting"], fr),
                                  ("Other PLAXIS objects of the model", ["Object", "Type", "Details"], model_objects(m)),
                                  ("What each run set in the stages", ["Run", "Set in PLAXIS"], sr)):
             if not rows:
@@ -553,10 +555,17 @@ def stages_rows(runs_all: list[dict]) -> list[list[str]]:
     rows = []
     for r in runs_all:
         o = r.get("outputs") or {}
+        flagged = set(o.get("_collapse_retry") or [])
         for x in (o.get("_stages_applied") or []) + (o.get("_soil_models") or []):
             if x:
-                rows.append([f"Run {r.get('no')}", str(x)])
+                rows.append([f"Run {r.get('no')}", ("⚠ " if x in flagged else "") + str(x)])
     return rows
+
+
+def collapse_rows(runs_all: list[dict]) -> list[list[str]]:
+    """V26.1.9: the runs where a Plastic phase collapsed with an undrained soil and was calculated again as
+    Consolidation (flagged in the report: their results are not those of the Plastic calculation asked for)."""
+    return [[f"Run {r.get('no')}", str(x)] for r in runs_all for x in ((r.get("outputs") or {}).get("_collapse_retry") or [])]
 
 
 def model_checks(m: dict) -> list[str]:
@@ -1036,6 +1045,14 @@ def word(project: dict, task: dict, out: dict, runs_all: list[dict], figs: list[
                 row.append(S.fmt(float(val)) if S._isnum(val) else r["status"])
             rows.append(row)
         _wtable(d, hdr, rows)
+    cr = collapse_rows(runs_all)
+    if cr:  # V26.1.9: flagged: a collapsed undrained Plastic phase calculated again as Consolidation
+        d.add_paragraph("Phases recalculated as Consolidation", style="Heading 3")
+        para = d.add_paragraph()
+        para.add_run("⚠ In these runs a Plastic phase collapsed (LogInfo 101, soil body collapse) with an Undrained (A) "
+                     "soil and was calculated again as Consolidation over the time interval shown. Their results are "
+                     "those of the Consolidation phase, not of the Plastic calculation of the model.").bold = True
+        _wtable(d, ["Run", "Recalculated"], cr[:200])
     sr = stages_rows(runs_all)
     if sr:  # V26.1.9: what each run set in the stages (kept in stages_applied.txt / soil_models.txt of the run)
         d.add_paragraph("What each run set in PLAXIS", style="Heading 3")

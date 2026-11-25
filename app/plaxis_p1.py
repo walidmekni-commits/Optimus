@@ -328,9 +328,20 @@ class P1Mixin:
                     except Exception:  # noqa: BLE001
                         pass
 
+    def _mid_layer(self, layers: list[tuple]) -> tuple:
+        """The layer at the interface's mid level (the span read by _adjacent_layers), else the first one."""
+        lo, hi = getattr(self, "_iface_span", (None, None))
+        if lo is not None and len(layers) > 1:
+            mid = (lo + hi) / 2
+            for lay in layers:
+                if lay[2] is not None and lay[3] - 1e-9 <= mid <= lay[2] + 1e-9:
+                    return lay[0], lay[1]
+        return layers[0][0], layers[0][1]
+
     def _adjacent_layers(self, g_i, itf) -> list[tuple]:
         """QA V26.1.9 E1: the soil layers the interface runs along, top to bottom: [(material, name, top, bottom)]
         (first borehole, at the interface's levels read in model coordinates)."""
+        self._iface_span = (None, None)
         from .plaxis_model import _obj_points, _surface_points, read_boreholes
         readings, is3 = [], False
         for o in (getattr(itf, "Parent", None), itf):
@@ -376,14 +387,14 @@ class P1Mixin:
                     except Exception:  # noqa: BLE001
                         continue
             if out:
+                self._iface_span = (lo, hi)
                 return out
         return []
 
     def _interfaces(self, g_i, edits: dict) -> list[str]:
         """The interface's own Rinter / virtual thickness. A custom interface material: a copy of it with the new values.
-        'From adjacent soil' (QA V26.1.9 E1): along one layer, a copy of that layer with the new values; along several
-        layers, the new values are set on the adjacent soil materials themselves (the interface stays 'from adjacent
-        soil', each part with its own layer; no soil copies, which PLAXIS 24.3 could not stage)."""
+        'From adjacent soil': a copy of the adjacent soil layer with the new values (along several layers, the layer at
+        the interface's mid level; per-layer materials made PLAXIS 24.3 fail at gotostages)."""
         from .solvers import SolverError
         done = []
         for key, props in edits.items():
@@ -414,20 +425,17 @@ class P1Mixin:
                 raise SolverError(f"{name}: no material to copy for its own interface properties: it takes its properties "
                                   "from the adjacent soil, and no soil layer of the first borehole was found at its level. "
                                   "Read the model again (Read from PLAXIS) so that its place is read in model coordinates.")
-            if len(layers) == 1:
-                mat, lname = layers[0][0], layers[0][1]
-                new = self._iface_copy(g_i, name, mat, props)
-                self._iface_assign(g_i, name, new)
-                done.append(f"{name}: own material {_name(new)}, a copy of the adjacent soil {lname} ({vals})")
-                continue
-            # several layers: the values are set on the adjacent soil materials themselves, the interface stays
-            # 'from adjacent soil' and each part keeps its own layer. Re-test of d5016d6: one soil copy per layer set on
-            # the pieces made PLAXIS 24.3 fail at gotostages (ShearStrengthDepthDependency sub-objects of the copies)
-            _try(g_i, "gotosoil")
-            for lay in layers:
-                self._iface_manual(g_i, lay[0], name, props)
-            done.append(f"{name}: 'from adjacent soil' kept, {vals} set on each adjacent layer ("
-                        + ", ".join(lay[1] for lay in layers) + "); other interfaces next to these layers take it too")
+            # one copy of the adjacent layer at the interface's mid level (eb9ec48, calculated on UA-22). Re-tests of
+            # d5016d6 and 9be0a91: one copy per layer, and the new values set on the soils themselves, both made
+            # PLAXIS 24.3 fail at gotostages (ShearStrengthDepthDependency): one layer per interface is what PLAXIS
+            # takes through its API
+            mat, lname = self._mid_layer(layers)
+            new = self._iface_copy(g_i, name, mat, props)
+            self._iface_assign(g_i, name, new)
+            more = f" (it runs along {', '.join(lay[1] for lay in layers)}: one material per layer made PLAXIS 24.3 " \
+                "fail when going to Staged construction)" \
+                if len(layers) > 1 else ""
+            done.append(f"{name}: own material {_name(new)}, a copy of the adjacent soil {lname} ({vals}){more}")
         return done
 
     # --- design approach (EC7 partial factors) ---------------------------------------------------------------------
