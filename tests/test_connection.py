@@ -577,3 +577,95 @@ def test_windowless_plaxis_processes_left_over_are_ignored(pc, monkeypatch):
     assert L.connect("3d") == ("s", "g")
     assert started and killed == [71] and L.LAST["ghosts"] == [72, 73]
     assert "3 PLAXIS Input process(es) without a window ignored" in " ".join(L.LAST["steps"])
+
+
+def test_owner_drawn_expert_menu_found_by_place(monkeypatch):
+    """C1b re-test: PLAXIS draws its Expert items itself ('!! non-supported owner drawn item !!') and in Staged
+    construction mode the Down x7 did not reach it. The item is the first one without a submenu after the
+    submenus; its command is sent; a greyed item makes OPTIMUS switch PLAXIS to Soil mode and try again."""
+    from app import plaxis_gui as G
+    st = {"dialog": False, "enabled": False, "soil": 0}
+    OD = "!! non-supported owner drawn item !!"
+
+    class Sub:
+        def __init__(self, n):
+            self.n = n
+
+        def item_count(self):
+            return self.n
+
+        def items(self):
+            return []
+
+    class It:
+        def __init__(self, sub=0, sep=False, target=False, text=OD):
+            self.sub, self.sep, self.target, self.t = sub, sep, target, text
+
+        def text(self):
+            return self.t
+
+        def type(self):
+            return 0x800 if self.sep else 0x100
+
+        def sub_menu(self):
+            return Sub(self.sub) if self.sub else None
+
+        def is_enabled(self):
+            return st["enabled"] if self.target else True
+
+        def item_id(self):
+            return 321 if self.target else 1
+
+        def select(self):
+            if self.target and st["enabled"]:
+                st["dialog"] = True
+
+        def click_input(self):
+            pass
+    items = [It(), It(), It(sep=True), It(sub=3), It(sub=2), It(sub=2), It(sub=4), It(target=True), It(), It(), It(sub=1)]
+
+    class ExpMenu:
+        def items(self):
+            return items
+
+    class Top:
+        def __init__(self, t):
+            self.t = t
+
+        def text(self):
+            return self.t
+
+        def sub_menu(self):
+            return ExpMenu()
+
+        def click_input(self):
+            pass
+
+    class Menu:
+        def item_count(self):
+            return 2
+
+        def items(self):
+            return [Top("&File"), Top("&Expert")]
+
+    class Main:
+        handle = 3
+
+        def menu(self):
+            return Menu()
+
+        def set_focus(self):
+            pass
+
+    def soil(pid, main):
+        st["soil"] += 1
+        st["enabled"] = True
+        return True
+    monkeypatch.setattr(G.time, "sleep", lambda s: None)
+    monkeypatch.setattr(G, "_dialog", lambda pid: "DLG" if st["dialog"] else None)
+    monkeypatch.setattr(G, "_keys", lambda k: None)
+    monkeypatch.setattr(G, "_to_soil_mode", soil)
+    assert G._by_place(items)[1] == 7  # separators skipped: Down x7
+    G.LOG.clear()
+    assert G.open_dialog(1, Main()) == "DLG" and st["soil"] == 1
+    assert any("item 7 (id 321, NOT enabled)" in x for x in G.LOG) and any("item 7 (id 321, enabled)" in x for x in G.LOG)

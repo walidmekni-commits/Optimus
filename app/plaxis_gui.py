@@ -243,9 +243,27 @@ def _via_win32(main, errors: list, opened: bool = False) -> bool:
     log("win32 Expert (opened): " + ", ".join(_text(s) or "?" for s in subs))
     item = next((s for s in subs if re.search(ITEM, _text(s))), None)
     if item is None:
+        # C1b re-test: PLAXIS draws its menu items itself ('!! non-supported owner drawn item !!'): the item is found
+        # by its place, the first item without a submenu after the submenus (Macro library, Run Python script, Run
+        # Python tool, Python), whatever mode PLAXIS is in and however many items come before
+        item, downs = _by_place(subs)
+        if item is None:
+            _keys("{ESC}{ESC}")
+            errors.append("win32: no remote scripting item under Expert")
+            return False
+        global KEY_DOWNS
+        KEY_DOWNS = downs
+        enabled = _enabled(item)
+        log(f"win32: items not readable; the item after the submenus is item {downs} "
+            f"(id {_safe(item.item_id)}, {'enabled' if enabled else 'NOT enabled'})")
+        if not enabled:
+            _keys("{ESC}{ESC}")
+            errors.append("win32: the Configure remote scripting server item is not enabled in this PLAXIS mode")
+            return False
         _keys("{ESC}{ESC}")
-        errors.append("win32: no remote scripting item under Expert")
-        return False
+        time.sleep(0.3)
+        item.select()  # its command sent to PLAXIS
+        return True
     log("win32: clicking " + _text(item))
     try:
         item.click_input()
@@ -254,6 +272,58 @@ def _via_win32(main, errors: list, opened: bool = False) -> bool:
         _keys("{ESC}{ESC}")
         item.select()
     return True
+
+
+KEY_DOWNS = ITEMS_ABOVE + 1  # Down presses to the item; set from the menu's shape when it can be read
+
+
+def _safe(f, d=None):
+    try:
+        return f()
+    except Exception:  # noqa: BLE001
+        return d
+
+
+def _enabled(it) -> bool:
+    return bool(_safe(it.is_enabled, True))
+
+
+def _is_sep(it) -> bool:
+    return bool((_safe(it.type, 0) or 0) & 0x800)  # MFT_SEPARATOR
+
+
+def _has_sub(it) -> bool:
+    sm = _safe(it.sub_menu)
+    return sm is not None and bool(_safe(sm.item_count, 1))
+
+
+def _by_place(subs):
+    """The first item without a submenu that follows a run of submenu items; with the Down presses to reach it
+    (separators are skipped by the keyboard)."""
+    seen_sub, n = False, 0
+    for it in subs:
+        if _is_sep(it):
+            continue
+        n += 1
+        if _has_sub(it):
+            seen_sub = True
+        elif seen_sub:
+            return it, n
+    return None, ITEMS_ABOVE + 1
+
+
+def _to_soil_mode(pid: int, main) -> bool:
+    """Clicks PLAXIS' Soil mode tab (the scripting server item may be greyed in another mode)."""
+    found, _ = _uia_named(pid, main.handle, r"(?i)^soil$")
+    for el in found:
+        try:
+            el.click_input()
+            time.sleep(3)
+            log("switched PLAXIS to Soil mode")
+            return True
+        except Exception:  # noqa: BLE001
+            continue
+    return False
 
 
 def _uia_named(pid: int, main_handle, pattern: str):
@@ -322,9 +392,14 @@ def open_dialog(pid: int, main) -> object:
     if _dialog(pid):
         return _dialog(pid)
     errors = []
-    for opened in (False, True):  # its command sent; else Expert opened by a click and the item clicked
+    switched = False
+    for opened in (False, True, True):  # its command sent; else Expert opened by a click and the item clicked
         try:
             if not _via_win32(main, errors, opened):
+                if errors and "not enabled" in errors[-1] and not switched:
+                    switched = True
+                    if _to_soil_mode(pid, main):
+                        continue
                 break
             d = _wait_dialog(pid, 8)
             if d:
@@ -354,8 +429,8 @@ def open_dialog(pid: int, main) -> object:
                     errors.append("uia: item not readable in the drop-down")
                     continue
             else:
-                log(f"keys: Down x{ITEMS_ABOVE + 1}, Enter")
-                _keys("{DOWN}" * (ITEMS_ABOVE + 1) + "{ENTER}")
+                log(f"keys: Down x{KEY_DOWNS}, Enter")
+                _keys("{DOWN}" * KEY_DOWNS + "{ENTER}")
             d = _wait_dialog(pid, 5)
             if d:
                 return d
@@ -383,6 +458,15 @@ def menu_report(pid: int) -> dict:
         out["expert_clicked"] = _open_expert(pid, main)
         _, names = _uia_named(pid, main.handle, ITEM)
         out["names_after_expert"] = names[:80]
+        try:  # the shape of the Expert drop-down (owner-drawn items have no readable text)
+            m = main.menu()
+            exp = next((t for t in m.items() if re.search(EXPERT, _text(t))), None)
+            subs = exp.sub_menu().items() if exp is not None else []
+            out["win32_expert"] = [{"text": _text(it), "separator": _is_sep(it), "submenu": _has_sub(it),
+                                    "enabled": _enabled(it), "id": _safe(it.item_id)} for it in subs]
+            out["item_by_place"] = _by_place(subs)[1]
+        except Exception as e:  # noqa: BLE001
+            out["win32_expert"] = f"{type(e).__name__}: {e}"
         _keys("{ESC}{ESC}")
     except Exception as e:  # noqa: BLE001
         out["uia"] = f"{type(e).__name__}: {e}"
