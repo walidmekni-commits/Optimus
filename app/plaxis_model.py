@@ -190,8 +190,10 @@ def _v(x):
 
 # QA V26.1.9 D1: PLAXIS 3D 2024.3 gives the calculation type of a phase as a number (1 K0 procedure, 4 Plastic,
 # 7 Safety on UA-22); the other numbers follow the order of the PLAXIS list (to confirm on PLAXIS, QA/QC)
-CALC_TYPE_CODES = {1: "K0 procedure", 2: "Gravity loading", 3: "Field stress", 4: "Plastic", 5: "Consolidation",
-                   6: "Fully coupled flow-deformation", 7: "Safety", 8: "Dynamic", 9: "Dynamic with consolidation"}
+# PLAXIS 3D 2024.3 codes confirmed on UA-22 (Ashraf, 26 Nov 2026): 1 K0 procedure, 4 Plastic, 6 Consolidation, 7 Safety.
+# The others are not confirmed: 5 is not Consolidation (it is left as its number).
+CALC_TYPE_CODES = {1: "K0 procedure", 2: "Gravity loading", 3: "Field stress", 4: "Plastic", 6: "Consolidation",
+                   7: "Safety", 8: "Dynamic", 9: "Dynamic with consolidation"}
 
 
 def is_safety_phase(ph: dict) -> bool:

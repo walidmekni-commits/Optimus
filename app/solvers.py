@@ -816,13 +816,16 @@ class PlaxisSolver(P1Mixin, P2Mixin):
             name = str(getattr(getattr(ph, "Name", None), "value", "") or _obj_name(ph))
             tried.add(_obj_name(ph))
             _try(g_i, "gotostages")
+            # R6 (re-test of b5968d9): PLAXIS 3D 2024.3 stores Consolidation as 6; the phase is taken as switched as
+            # soon as its type is no longer Plastic (whatever number PLAXIS uses)
             for how in (lambda: setattr(ph, "DeformCalcType", "consolidation"),
-                        lambda: g_i.set(ph.DeformCalcType, "Consolidation"), lambda: g_i.set(ph.DeformCalcType, 5)):
+                        lambda: g_i.set(ph.DeformCalcType, "Consolidation"), lambda: g_i.set(ph.DeformCalcType, 6)):
                 try:
                     how()
                 except Exception:  # noqa: BLE001
                     continue
-                if "consolidation" in calc_type_name(getattr(ph, "DeformCalcType", "")).lower():
+                now = calc_type_name(getattr(ph, "DeformCalcType", "")).lower()
+                if "consolidation" in now or (now and "plastic" not in now):
                     break
             else:
                 break

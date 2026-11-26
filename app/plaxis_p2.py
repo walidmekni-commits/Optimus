@@ -24,8 +24,8 @@ from .plaxis_p1 import _name, _set, _set_names, _staged_set, _try, _val
 # the PLAXIS names, then the PLAXIS number (QA V26.1.9 D1: 1 K0 procedure, 4 Plastic, 7 Safety in PLAXIS 3D 2024.3)
 INITIAL_NAMES = {0: ("K0 procedure", "K0Procedure", 1), 1: ("Gravity loading", "GravityLoading", 2),
                  2: ("Field stress", "FieldStress", 3)}
-CALC_NAMES = {0: ("Plastic", 4), 1: ("Consolidation", 5), 2: ("Fully coupled flow-deformation", "Flow-deformation coupled",
-                                                              "FullyCoupledFlowDeformation", 6)}
+CALC_NAMES = {0: ("Plastic", 4), 1: ("Consolidation", 6),  # R6: PLAXIS 3D 2024.3 stores Consolidation as 6
+              2: ("Fully coupled flow-deformation", "Flow-deformation coupled", "FullyCoupledFlowDeformation")}
 THERMAL_NAMES = {0: ("Ignore temperature", "IgnoreTemperature"), 1: ("Earth gradient", "EarthGradient"),
                  2: ("Use temperatures from previous phase", "UseTemperaturesFromPreviousPhase"),
                  3: ("Steady state thermal flow", "SteadyStateThermalFlow")}

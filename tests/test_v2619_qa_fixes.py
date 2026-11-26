@@ -538,16 +538,16 @@ def test_collapse_retry_with_numeric_calc_type_and_drainage_variable():
 
     def g_set(prop, val):
         sets.append(val)
-        if val == 5:
-            ph.DeformCalcType = V(5)
+        if val == 6:
+            ph.DeformCalcType = V(6)
 
     def calculate():
-        ph.LogInfo = V("0" if ph.DeformCalcType.value == 5 else "101")
+        ph.LogInfo = V("0" if ph.DeformCalcType.value == 6 else "101")
     g = types.SimpleNamespace(Phases=[ph], Materials=[types.SimpleNamespace(DrainageType=V(1))], calculate=calculate,
                               gotostages=lambda: None, set=g_set)
     solver = PlaxisSolver.__new__(PlaxisSolver)
     done, err = solver._retry_collapse(g, 7.0, RuntimeError("Phase_3 failed"))
-    assert err is None and ph.DeformCalcType.value == 5 and done and done[0].startswith("Phase_3 recalculated")
+    assert err is None and ph.DeformCalcType.value == 6 and done and done[0].startswith("Phase_3 recalculated")
 
     m = {"version": "3d", "materials": [{"name": "L2", "drainage": "Drained"}], "phases": []}
     assert not [x for x in features.candidates(m, {}) if x["key"] == "collapse:days"]
@@ -582,3 +582,32 @@ def test_output_port_zero_falls_back(monkeypatch):
     g = types.SimpleNamespace(view=lambda ph: 0)
     g_o = solver._output(g, None)
     assert g_o.Phases == [1] and 10000 not in tried and tried[-1] == 10005 and saved == {"output_port": 10005}
+
+
+def test_r6_consolidation_is_code_6_and_the_switch_is_accepted():
+    """R6: PLAXIS 3D 2024.3 stores Consolidation as 6 after setattr(DeformCalcType, 'consolidation'): the retry
+    takes it as switched (it was 4 = Plastic) and calculates again."""
+    import types
+    from app.plaxis_model import calc_type_name
+    from app.solvers import PlaxisSolver
+    assert calc_type_name(6) == "Consolidation" and calc_type_name(4) == "Plastic" and calc_type_name(5) == "5"
+
+    class V:
+        def __init__(self, v):
+            self.value = v
+
+    class Ph(types.SimpleNamespace):
+        def __setattr__(self, k, v):
+            if k == "DeformCalcType" and isinstance(v, str):
+                v = V({"consolidation": 6, "plastic": 4}[v.lower()])  # PLAXIS keeps the code
+            super().__setattr__(k, v)
+    ph = Ph(Name=V("Phase_3"), DeformCalcType=V(4), LogInfo=V("101"), ShouldCalculate=True, TimeInterval=V(0))
+    calls = []
+
+    def calculate():
+        calls.append(1)
+        ph.LogInfo = V("0" if ph.DeformCalcType.value == 6 else "101")
+    g = types.SimpleNamespace(Phases=[ph], Materials=[types.SimpleNamespace(DrainageType=V(1))], calculate=calculate,
+                              gotostages=lambda: None, set=lambda p_, v: None)
+    done, err = PlaxisSolver.__new__(PlaxisSolver)._retry_collapse(g, 7.0, RuntimeError("Phase_3 failed"))
+    assert err is None and calls == [1] and ph.DeformCalcType.value == 6 and done
