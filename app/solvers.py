@@ -673,22 +673,31 @@ class PlaxisSolver(P1Mixin, P2Mixin):
             return p
         # re-test of e56a560: g_i.view() gave port 0 (and once the Input port) with an old Output window open:
         # asked again, then the port the last Output answered on and the ports PLAXIS Output windows show
-        if not view():
-            time.sleep(3)
-            view()
-        last = int(settings.load().get("output_port") or 0)
-        for p in [last] + _output_window_ports():
-            if p > 0 and p != int(self.port or 0) and p not in ports:
-                ports.append(p)
-        for port in ports:
-            for pw in dict.fromkeys([self.password or "", ""]):
-                try:
-                    _, g_o = new_server(self.host, port, password=pw)
-                    list(g_o.Phases)  # a real request: fails at once when the security does not match
-                    settings.save({"output_port": port})
-                    return g_o
-                except Exception as e:  # noqa: BLE001
-                    errors.append(f"port {port} {'secured' if pw else 'unsecured'}: {e}")
+        # R6 re-test: an Output window left open from an earlier run, its server off, made every result fail: when
+        # no port answers, the Output windows whose server is off (and those of OPTIMUS' runs) are closed and
+        # Output is opened again. Only ports that PLAXIS gives now are tried (not a port remembered from before).
+        for round_ in range(2):
+            tried = set()  # a reopened Output can answer on the same port as the closed one
+            if round_:
+                _close_output("stale")
+                _close_output("runs")
+                time.sleep(2)
+            if not view():
+                time.sleep(3)
+                view()
+            for p in _output_window_ports():
+                if p > 0 and p != int(self.port or 0) and p not in ports:
+                    ports.append(p)
+            for port in [p for p in ports if p not in tried]:
+                tried.add(port)
+                for pw in dict.fromkeys([self.password or "", ""]):
+                    try:
+                        _, g_o = new_server(self.host, port, password=pw)
+                        list(g_o.Phases)  # a real request: fails at once when the security does not match
+                        settings.save({"output_port": port})
+                        return g_o
+                    except Exception as e:  # noqa: BLE001
+                        errors.append(f"port {port} {'secured' if pw else 'unsecured'}: {e}")
         raise SolverError("PLAXIS Output did not answer (" + ("; ".join(errors) or "no Output port given by PLAXIS")
                           + "). Close every PLAXIS Output window, then run again.")
 
@@ -1266,6 +1275,8 @@ class PlaxisSolver(P1Mixin, P2Mixin):
                 out["_plots"] = self._export_plots(g_i, g_o, want, run_dir, say)
             except Exception as e:  # noqa: BLE001
                 out.setdefault("_missing", []).append(f"PLAXIS Output images: {e}")
+        if g_o is not None:  # R6 re-test: the run's PLAXIS Output is closed, so the next run opens a fresh one
+            _close_output("runs")
         if getattr(self, "want_model", False):  # the full run of the uploaded model: read its geometry while it is open
             try:
                 from .plaxis_model import extract
@@ -1300,6 +1311,15 @@ def _rtype(rgroup, name: str):
         except Exception:  # noqa: BLE001
             continue
     raise SolverError(f"not in this PLAXIS: result {name} (tried {', '.join(RESULT_ALIASES.get(name, [name]))})")
+
+
+def _close_output(what: str) -> list[str]:
+    """Closes PLAXIS Output windows ('runs': OPTIMUS' run files; 'stale': server off), on Windows only."""
+    try:
+        from .plaxis_launcher import gui
+        return gui("close_output_" + what, timeout=30).get("closed") or []
+    except Exception:  # noqa: BLE001
+        return []
 
 
 def _output_window_ports() -> list[int]:

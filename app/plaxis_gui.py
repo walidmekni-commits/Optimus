@@ -629,10 +629,33 @@ def _in_dialog(pid: int, dlg, want_port: int | None) -> dict:
     return {"port": port, "password": password, "pid": pid}
 
 
+def close_output(what: str) -> list[str]:
+    """Closes PLAXIS Output windows (R6 re-test: an Output left open from an earlier run had its scripting server off
+    and every result failed): 'runs' = the windows of OPTIMUS' run files (…_run_NNN…), 'stale' = Output windows
+    whose server is off (no 'SERVER ACTIVE' in the title). Returns the titles closed."""
+    from pywinauto import Desktop
+    done = []
+    for w in Desktop(backend="win32").windows(visible_only=True):
+        t = _text(w)
+        if not re.search(r"(?i)\bplaxis\b.*\boutput\b", t):
+            continue
+        if what == "runs" and not re.search(r"(?i)_run_\d{3}", t):
+            continue
+        if what == "stale" and re.search(r"(?i)server active", t):
+            continue
+        try:
+            w.close()
+            done.append(t)
+            log(f"closed PLAXIS Output: {t}")
+        except Exception as e:  # noqa: BLE001
+            log(f"closing {t}: {type(e).__name__}: {e}")
+    return done
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--pid", type=int, default=0)
-    ap.add_argument("--action", default="start", choices=("start", "dismiss", "windows", "menu"))
+    ap.add_argument("--action", default="start", choices=("start", "dismiss", "windows", "menu", "close_output_runs", "close_output_stale"))
     ap.add_argument("--port", type=int, default=0)
     a = ap.parse_args(argv)
     try:
@@ -644,6 +667,8 @@ def main(argv=None) -> int:
     try:
         if a.action == "windows":
             out = {"ok": True, "windows": plaxis_windows()}
+        elif a.action.startswith("close_output_"):
+            out = {"ok": True, "closed": close_output(a.action[len("close_output_"):])}
         elif a.action == "menu":
             out = {"ok": True, "menu": menu_report(a.pid)}
         elif a.action == "dismiss":

@@ -611,3 +611,59 @@ def test_r6_consolidation_is_code_6_and_the_switch_is_accepted():
                               gotostages=lambda: None, set=lambda p_, v: None)
     done, err = PlaxisSolver.__new__(PlaxisSolver)._retry_collapse(g, 7.0, RuntimeError("Phase_3 failed"))
     assert err is None and calls == [1] and ph.DeformCalcType.value == 6 and done
+
+
+def test_r6_output_with_its_server_off_is_closed_and_opened_again(monkeypatch):
+    """R6 re-test: an Output window left from an earlier run had its server off: no port answered. OPTIMUS closes
+    the Output windows whose server is off (and those of its runs) and opens Output again."""
+    import sys
+    import types
+    from app import solvers, settings
+    from app.solvers import PlaxisSolver
+    state = {"closed": [], "views": 0}
+
+    def new_server(host, port, password=""):
+        if port != 10021 or not state["closed"]:
+            raise RuntimeError("Failed to establish a new connection")
+        return None, types.SimpleNamespace(Phases=[1])
+
+    def view(ph):
+        state["views"] += 1
+        return 10021
+    monkeypatch.setitem(sys.modules, "plxscripting.easy", types.SimpleNamespace(new_server=new_server))
+    monkeypatch.setitem(sys.modules, "plxscripting", types.ModuleType("plxscripting"))
+    monkeypatch.setattr(solvers.time, "sleep", lambda s: None)
+    monkeypatch.setattr(solvers, "_output_window_ports", lambda: [])
+    monkeypatch.setattr(solvers, "_close_output", lambda what: state["closed"].append(what) or [])
+    monkeypatch.setattr(settings, "load", lambda: {"output_port": 10000})
+    monkeypatch.setattr(settings, "save", lambda d: None)
+    solver = PlaxisSolver.__new__(PlaxisSolver)
+    solver.host, solver.port, solver.password = "localhost", 10500, "pw"
+    g_o = solver._output(types.SimpleNamespace(view=view), None)
+    assert g_o.Phases == [1] and state["closed"] == ["stale", "runs"] and state["views"] == 2
+
+
+def test_close_output_windows(monkeypatch):
+    import sys
+    import types
+    from app import plaxis_gui as G
+    closed = []
+
+    class W:
+        def __init__(self, t):
+            self.t = t
+
+        def window_text(self):
+            return self.t
+
+        def close(self):
+            closed.append(self.t)
+    wins = [W("PLAXIS 3D Advanced Output - [UA-22_converted_2_run_002 | Phase_3]"),
+            W("PLAXIS 3D Advanced Output - [Mine.p3d] --- SERVER ACTIVE on port 10001"),
+            W("PLAXIS 3D Advanced: UA-22.p3d --- SERVER ACTIVE on port 10500")]
+    fake = types.ModuleType("pywinauto")
+    fake.Desktop = lambda backend="win32": types.SimpleNamespace(windows=lambda visible_only=True: wins)
+    monkeypatch.setitem(sys.modules, "pywinauto", fake)
+    assert G.close_output("stale") == [wins[0].t]
+    closed.clear()
+    assert G.close_output("runs") == [wins[0].t] and wins[2].t not in closed
