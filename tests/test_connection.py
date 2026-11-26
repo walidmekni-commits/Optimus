@@ -191,7 +191,7 @@ def test_window_automation_reads_password_and_starts_server(monkeypatch):
     monkeypatch.setattr(G, "windows_of", lambda pid: ([disc] if shown["disclaimer"] else []) + [main, dlg])
     monkeypatch.setattr(G.time, "sleep", lambda s: None)
     r = G.start_server(4242)
-    assert r == {"port": 10000, "password": "xRmPezxT2T~+zP<2", "pid": 4242}
+    assert r == {"port": 10000, "password": "xRmPezxT2T~+zP<2", "pid": 4242, "was_on": False}
     assert not shown["disclaimer"] and state.text == "The server is running"
     assert any("password read from PLAXIS" in x for x in G.LOG)
 
@@ -767,7 +767,7 @@ def test_running_server_dialog_as_plaxis_3d_2024_shows_it(monkeypatch):
                     C("Sta&rt server", "TButton", False), C("&Reset to default", "TButton", False),
                     C("&Find available", "TButton", False), C("&Close", "TButton")]
     monkeypatch.setattr(G.time, "sleep", lambda s: None)
-    assert G._in_dialog(4316, Dlg(), None) == {"port": 10500, "password": "xRmPezxT2T~+zP<2", "pid": 4316}
+    assert G._in_dialog(4316, Dlg(), None) == {"port": 10500, "password": "xRmPezxT2T~+zP<2", "pid": 4316, "was_on": True}
     assert clicks == ["&Close"]
 
     OD = "!! non-supported owner drawn item !!"

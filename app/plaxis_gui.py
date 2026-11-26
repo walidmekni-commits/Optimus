@@ -626,7 +626,7 @@ def _in_dialog(pid: int, dlg, want_port: int | None) -> dict:
             if _running(dlg) is False:
                 raise RuntimeError("PLAXIS says the server is not running after pressing Start server")
     _click(_button(dlg, r"(?i)^close$"), "Close")
-    return {"port": port, "password": password, "pid": pid}
+    return {"port": port, "password": password, "pid": pid, "was_on": bool(running)}
 
 
 def close_output(what: str) -> list[str]:

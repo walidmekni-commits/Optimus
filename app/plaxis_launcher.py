@@ -392,7 +392,8 @@ def gui_start_server(pid: int, progress=lambda m: None, want_port: int = 0) -> d
     read port and password, Start server, Close. {"ok", "port", "password"} or {"ok": False, "error"}."""
     progress("Switching on PLAXIS' scripting server for you (Expert › Configure remote scripting server)…")
     r = gui("start", pid, want_port, timeout=180)  # the menu routes wait for a slow dialog
-    _step(("server switched on in PLAXIS: " if r.get("ok") else "menu switch not possible: ")
+    _step(("password read from PLAXIS' window (server already on): " if r.get("ok") and r.get("was_on") else
+           "server switched on in PLAXIS: " if r.get("ok") else "menu switch not possible: ")
           + ("" if r.get("ok") else str(r.get("error")) + " | ") + ", ".join(r.get("log") or []))
     return r
 
@@ -629,8 +630,9 @@ def _start_in_window(pid, version, progress, stop_check):
         if _listening("localhost", port):
             got = _try("localhost", port, [pw], version)
             if got:
-                return _connected(got[0], got[1], "localhost", port, pw, f"connected on port {port} (server "
-                                  "switched on in PLAXIS' window)")
+                return _connected(got[0], got[1], "localhost", port, pw, f"connected on port {port} ("
+                                  + ("password read from PLAXIS' window" if r.get("was_on") else
+                                     "server switched on in PLAXIS' window") + ")")
         time.sleep(1)
     LAST["error"] = f"PLAXIS' server was switched on but did not answer on port {port} ({LAST['error']})"
     return None
