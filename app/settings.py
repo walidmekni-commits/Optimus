@@ -7,7 +7,7 @@ from pathlib import Path
 
 from .config import data_dir, env
 
-FIELDS = ("solver", "host", "port", "password", "output_port", "plxscripting_path", "anthropic_api_key", "runs_dir", "launched_pid", "input_exe", "bad_exes", "connect_mode", "plain_exes", "connected_how",
+FIELDS = ("solver", "host", "port", "password", "output_port", "plxscripting_path", "anthropic_api_key", "runs_dir", "launched_pid", "launched_at", "input_exe", "bad_exes", "connect_mode", "plain_exes", "connected_how",
           "projects_dir", "smtp_host", "smtp_port", "smtp_user", "smtp_password", "smtp_from")
 
 

@@ -32,6 +32,7 @@ EXE_NAMES = {
     "2d": ("plaxis2dxinput.exe", "plaxis2dinput.exe"),
 }
 ALL_INPUT_EXES = tuple(n for v in EXE_NAMES.values() for n in v)
+GHOST_WAIT = 4  # × 5 s: time given to an open PLAXIS process to show its window before it is counted as left over
 START_TIMEOUT = 600  # seconds: a cold PLAXIS start with a licence check can take a while; the user can stop sooner
 GUI_AFTER = 25       # seconds without an answer before the app switches the server on through PLAXIS' menu
 GUI_FIRST = 8        # started without options: first try of the menu (again every 20 s while PLAXIS opens)
@@ -155,6 +156,11 @@ def running_inputs() -> list[dict]:
     # re-test of d5016d6 (C1b): PLAXIS 3D 2024 runs helper processes of Plaxis3DInput.exe without a window; the one
     # with the PLAXIS Input window comes first, so the window automation acts on it
     return sorted(out.values(), key=lambda p: not (p["title"] and not re.search(r"(?i)output|calculat", p["title"])))
+
+
+def _has_window(p: dict) -> bool:
+    """The process shows a PLAXIS Input window (its title read from the visible windows), not only helpers."""
+    return bool(str(p.get("title") or "").strip())  # its disclaimer or crash window counts too
 
 
 def image_name(pid: int) -> str:
@@ -458,6 +464,7 @@ def connect(version: str = "3d", progress=lambda msg: None, should_stop=lambda: 
     # 2. a PLAXIS Input that is already open
     progress("Looking for an open PLAXIS Input…")
     open_now = running_inputs()
+    LAST["ghosts"] = []
     launched = int(cfg.get("launched_pid") or 0)
     for proc in open_now:
         ports = listening_ports([proc["pid"]])
@@ -469,10 +476,33 @@ def connect(version: str = "3d", progress=lambda msg: None, should_stop=lambda: 
                     _remember_exe(proc["pid"])
                     return _connected(r[0], r[1], "localhost", pt, r[2], f"connected to open PLAXIS on port {pt}")
     stop_check()
+    # re-test of b5968d9 (C2): PLAXIS Input processes left without a window (and without a server) by an earlier
+    # session are not an open PLAXIS: only a process with a PLAXIS Input window counts. A PLAXIS still opening gets a
+    # little time to show its window; the one OPTIMUS started itself counts as opening for START_TIMEOUT.
+    opening = bool(launched) and time.time() - float(cfg.get("launched_at") or 0) < START_TIMEOUT
+    windowed = [p for p in open_now if _has_window(p)]
+    if open_now and not windowed and not opening:
+        for _ in range(GHOST_WAIT):
+            stop_check()
+            time.sleep(5)
+            open_now = running_inputs()
+            windowed = [p for p in open_now if _has_window(p)]
+            if windowed:
+                break
+    ghosts = [p for p in open_now if not _has_window(p) and not (opening and p["pid"] == launched)]
+    if ghosts and not windowed:
+        for g in ghosts:
+            if g["pid"] == launched:  # OPTIMUS' own PLAXIS that never opened: ended
+                _kill(g["pid"])
+        LAST["ghosts"] = [g["pid"] for g in ghosts if g["pid"] != launched]
+        _step(f"{len(ghosts)} PLAXIS Input process(es) without a window ignored: {', '.join(str(g['pid']) for g in ghosts)}")
+        progress(f"{len(ghosts)} PLAXIS Input process(es) without a window (left from an earlier session) are "
+                 "ignored; starting a new PLAXIS…")
+        open_now = [p for p in open_now if p not in ghosts]
     # QA V26.1.9 C1: a PLAXIS that is open but refuses the password is never replaced by a second, empty PLAXIS:
     # its server's port and password are read in its own window (also the one OPTIMUS started itself)
-    others = [p for p in open_now if p["pid"] != launched] or \
-             ([p for p in open_now if p["pid"] == launched] if _listening("localhost", port) else [])
+    others = [p for p in windowed if p["pid"] != launched] or \
+             ([p for p in windowed if p["pid"] == launched] if _listening("localhost", port) else [])
     if others:
         proc = others[0]
         _step(f"{proc['name']} open ({proc['title'] or 'no title'}) without a usable scripting server")
@@ -491,7 +521,7 @@ def connect(version: str = "3d", progress=lambda msg: None, should_stop=lambda: 
             f"its scripting server on ({why}). In PLAXIS close any open message, then press Try again.")
 
     # 3. start PLAXIS with the server on (or keep waiting for the one the app started before)
-    if launched and any(p["pid"] == launched for p in open_now):
+    if launched and any(p["pid"] == launched for p in open_now) and (opening or any(p["pid"] == launched for p in windowed)):
         progress("PLAXIS started by the app is still opening, waiting for it…")
         r = _wait(port, pw, version, progress, stop_check, launched, START_TIMEOUT, "PLAXIS Input")
         if r:
@@ -527,7 +557,8 @@ def connect(version: str = "3d", progress=lambda msg: None, should_stop=lambda: 
                 quit_why = f"{_exe_label(exe)}: {e}"
                 break
             pid = getattr(proc, "pid", 0) or 0
-            settings.save({"host": "localhost", "port": port, "password": new_pw, "launched_pid": pid})
+            settings.save({"host": "localhost", "port": port, "password": new_pw, "launched_pid": pid,
+                           "launched_at": time.time()})
             _step(f"started {exe} (process {pid}) on port {port}" + (" (as a double-click)" if plain else " (F.2.2 options)"))
             try:
                 r = _wait(port, new_pw, version, progress, stop_check, pid, START_TIMEOUT,
@@ -649,4 +680,11 @@ def _timeout_error(exe, port, pid):
     return ConnectError(
         f"PLAXIS Input was started{' (' + exe + ')' if exe else ''} but its scripting server did not answer on port "
         f"{port}{'. PLAXIS shows: ' + title if title else ''}. If PLAXIS is waiting for you (licence, a message or "
-        "the start window), answer it and press Try again. Otherwise press Restart PLAXIS.")
+        "the start window), answer it and press Try again. Otherwise press Restart PLAXIS." + _ghost_note())
+
+
+def _ghost_note() -> str:
+    g = LAST.get("ghosts") or []
+    return (f" {len(g)} PLAXIS Input process(es) without a window were left from an earlier session (process "
+            f"{', '.join(map(str, g))}): if PLAXIS does not start, end them in Task Manager (Details, Plaxis3DInput.exe "
+            "or Plaxis2DInput.exe without a window) and press Try again.") if g else ""

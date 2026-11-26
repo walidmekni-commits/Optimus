@@ -101,7 +101,8 @@ def test_waiting_can_be_stopped_and_a_version_that_quits_is_replaced(pc, monkeyp
 
 
 def test_try_again_waits_for_the_plaxis_the_app_started(pc, monkeypatch):
-    settings.save({"launched_pid": 55, "port": 10000, "password": "pw"})
+    import time as _t
+    settings.save({"launched_pid": 55, "launched_at": _t.time(), "port": 10000, "password": "pw"})  # started just now
     pc["open"] = [{"pid": 55, "name": "Plaxis3DInput.exe", "title": ""}]
     monkeypatch.setattr(L.subprocess, "Popen", lambda *a, **k: pytest.fail("must not start a second PLAXIS"))
     monkeypatch.setattr(L, "gui_start_server", lambda *a, **k: pytest.fail("not on the app's own PLAXIS so soon"))
@@ -546,3 +547,33 @@ def test_locked_screen_is_said_plainly(pc, monkeypatch):
     with pytest.raises(L.ConnectError) as e:
         L.connect("3d")
     assert "Unlock the PC screen" in str(e.value) and "close any open message" not in str(e.value)
+
+
+def test_windowless_plaxis_processes_left_over_are_ignored(pc, monkeypatch):
+    """Re-test of b5968d9 (C2): three Plaxis3DInput.exe left from yesterday without a window or a server: OPTIMUS
+    does not take them for an open PLAXIS (no 'Input window not found'), it starts a new PLAXIS; OPTIMUS' own
+    leftover is ended, the others are named in case PLAXIS does not start."""
+    settings.save({"launched_pid": 71, "launched_at": 1.0, "port": 10000, "password": "pw"})  # started yesterday
+    pc["open"] = [{"pid": p, "name": "Plaxis3DInput.exe", "title": ""} for p in (71, 72, 73)]
+    monkeypatch.setattr(L.time, "sleep", lambda s: None)
+    monkeypatch.setattr(L, "gui_start_server", lambda *a, **k: pytest.fail("no PLAXIS window to automate"))
+    killed, started = [], []
+    monkeypatch.setattr(L, "_kill", lambda pid: (killed.append(pid), pc["open"].remove(next(p for p in pc["open"] if p["pid"] == pid))))
+    monkeypatch.setattr(L, "find_input_exes", lambda v: [r"C:\P\PLAXIS 3D 2024\Plaxis3DInput.exe"])
+    monkeypatch.setattr(L, "find_input_exe", lambda v: r"C:\P\PLAXIS 3D 2024\Plaxis3DInput.exe")
+
+    class Proc:
+        pid, returncode = 90, None
+
+        def poll(self):
+            return None
+
+    def popen(args, cwd=None):
+        started.append(args)
+        pc["listen"].add(10000)
+        pc["accept"] = args[2].split("=", 1)[1] if len(args) > 2 else "pw"
+        return Proc()
+    monkeypatch.setattr(L.subprocess, "Popen", popen)
+    assert L.connect("3d") == ("s", "g")
+    assert started and killed == [71] and L.LAST["ghosts"] == [72, 73]
+    assert "3 PLAXIS Input process(es) without a window ignored" in " ".join(L.LAST["steps"])
