@@ -1072,6 +1072,23 @@ KIND_LABEL = {"plate": "Plate", "anchor": "Anchor", "geogrid": "Geogrid", "embed
 SOIL_MODELS = ["MC: 2", "HS: 3", "HSsmall: 4", "SSC: 6"]  # PLAXIS SoilModel codes (V26.1.8)
 # V26.1.9 (P2): Soft Soil and Modified Cam-Clay from the same parameters; a Hoek-Brown rock to an equivalent MC
 SOIL_MODELS_P2 = ["MC: 2", "HS: 3", "HSsmall: 4", "Soft Soil: 5", "SSC: 6", "MCC: 8"]
+NGI_ADP = "NGI-ADP (from su, Undrained C): 9"  # V26.1.9 (P2): a clay with its undrained shear strength
+
+
+def is_clay(mat: dict) -> bool:
+    """An undrained clay: Undrained (B) / (C), or φ' = 0 with a cohesion (its su)."""
+    p, d = mat.get("props", {}), str(mat.get("drainage") or "").strip().lower()
+    c = next((p[k] for k in ("cref", "cRef", "c") if p.get(k)), 0) or 0
+    phi = next((p[k] for k in ("phi", "Phi") if k in p), None)
+    return c > 0 and (bool(re.search(r"undrained\s*\(?[bc]|^[23]$", d)) or (phi is not None and phi < 1))
+
+
+def is_sand(mat: dict) -> bool:
+    """A granular soil (c' ≤ 5 kN/m², φ' ≥ 25°): UBC3D-PLM is offered for liquefaction."""
+    p = mat.get("props", {})
+    c = next((p[k] for k in ("cref", "cRef", "c") if k in p), 0) or 0
+    phi = next((p[k] for k in ("phi", "Phi") if k in p), None)
+    return phi is not None and phi >= 25 and c <= 5
 HB_PROPS = ("GSI", "SigmaCI", "Sigmaci", "sigmaci", "SigmaCi", "mi", "Mi")
 STIFF_PROPS = ("E50Ref", "EOedRef", "EURRef", "G0Ref", "ERef", "Eref", "E50ref", "Eoedref", "Eurref", "G0ref")
 
@@ -1102,7 +1119,8 @@ def candidates(m: dict) -> list[dict]:
         p = mat.get("props", {})
         code = str(mat.get("model") or "").strip()
         rock = any(k in p for k in HB_PROPS) or "hoek" in code.lower()
-        models = (["Hoek-Brown: 10", "MC (equivalent to Hoek-Brown): 2"] if rock else list(SOIL_MODELS_P2))
+        models = (["Hoek-Brown: 10", "MC (equivalent to Hoek-Brown): 2"] if rock else list(SOIL_MODELS_P2)
+                  + ([NGI_ADP] if is_clay(mat) else []))
         cur = next((x for x in models if x.split(": ")[1] == code or x.split(": ")[0].lower() == code.lower()), None)
         add(f"smodel:{mat['name']}", "soil", f"Soil material · {mat['name']}", f"{mat['name']} soil model",
             f"{mat['name']}.SoilModel", "", cur or code or "", kind="values", values=models)
@@ -1116,6 +1134,10 @@ def candidates(m: dict) -> list[dict]:
             lam = p["pRef"] / p["EOedRef"]
             add(f"sscmu:{mat['name']}", "soil", f"Soil material · {mat['name']}", f"{mat['name']} creep index μ* (SSC)",
                 f"{mat['name']}.SSCmu", "-", float(f"{lam / 25:.4g}"))
+        if not rock and is_sand(mat):  # V26.1.9 (P2): liquefaction (UBC3D-PLM, PLAXIS Ultimate) from (N1)60
+            add(f"ubc:{mat['name']}", "soil", f"Soil material · {mat['name']}",
+                f"{mat['name']} (N1)60 for UBC3D-PLM (liquefaction; the material becomes UBC3D-PLM)",
+                f"{mat['name']}.UBCN160", "-", 15.0)
     for bi, b in enumerate(m["boreholes"]):
         for lay in b.get("layers", []):
             add(f"layer:{lay['name']}.{bi}.Bottom", "soil", f"Soil layers · {b['name']}",

@@ -251,3 +251,70 @@ def test_every_module_runs_the_p2_features(client, mode, extra):
         txt = z.read("word/document.xml").decode("utf-8")
     assert "profile" in txt.lower()
     assert client.get(f"/api/tasks/{tid}/results.xlsx?swap=0").status_code == 200
+
+
+# V26.1.9 (P2, model switch): NGI-ADP from su, UBC3D-PLM from (N1)60, the model numbers read from PLAXIS' own list
+class Enum(int):
+    """A PLAXIS enumeration: its value and the names PLAXIS gives the codes."""
+    enum_dict = {"Linear elastic": 1, "Mohr-Coulomb": 2, "Hardening soil": 3, "NGI-ADP": 9, "Hoek-Brown": 10,
+                 "Sekiguchi-Ohta (Viscid)": 11, "UBC3D-PLM": 14}
+
+
+class PMat(O):
+    """A material whose model parameters have this PLAXIS' own names (found among its properties)."""
+    NAMES = ("Gur_SuA", "gammaf_C", "gammaf_E", "gammaf_DSS", "SuA_ref", "SuC_TX_SuA", "SuP_SuA", "tau0_SuA",
+             "SuDSS_SuA", "nu_u", "K_G_e", "K_B_e", "K_G_p", "me", "ne", "np", "pRef", "phi_cv", "phi_p", "cref",
+             "N1_60", "fdens", "fEpost", "Rf", "TensileStrength")
+
+    def __dir__(self):
+        return list(self.NAMES) + list(vars(self))
+
+    def setproperties(self, *args):
+        for k, v in zip(args[::2], args[1::2]):
+            if k not in self.NAMES and k not in ("SoilModel", "DrainageType"):
+                raise RuntimeError(f"no property {k}")
+            super().setproperties(k, v)
+
+
+def test_ngi_adp_from_su_and_its_number_from_plaxis():
+    from app.solvers import ngi_adp_params
+    g = G()
+    g.Clay = PMat("Clay", SoilModel=Enum(2), cref=40.0, ERef=12000.0, nu=0.3, DrainageType=V("Undrained (C)"))
+    out = solver(g)._soil_model(g, "Clay", 9)
+    assert g.Clay.props["SoilModel"] == 9 and g.Clay.props["SuA_ref"] == pytest.approx(40.0)
+    assert g.Clay.props["Gur_SuA"] == pytest.approx(12000 / 2.6 / 40) and g.Clay.props["gammaf_DSS"] == 5.0
+    assert g.Clay.props["SuP_SuA"] == 0.4 and g.Clay.props["nu_u"] == 0.495 and g.Clay.DrainageType == "Undrained (C)"
+    assert "NGI-ADP from su 40" in out
+    assert ngi_adp_params(30.0, None, None, None, None)[0]["GurSuA"] == 500.0
+
+
+def test_ubc3d_plm_from_n160_needs_plaxis_to_list_it():
+    from app.solvers import ubc3d_params
+    p, _ = ubc3d_params(15, 34.0)
+    kge = 21.7 * 20 * 15 ** 0.3333
+    assert p["KGe"] == pytest.approx(kge) and p["KBe"] == pytest.approx(0.7 * kge)
+    assert p["KGp"] == pytest.approx(kge * 225 * 0.003 + 100) and p["phicv"] == pytest.approx(32.5)
+    assert p["phip"] == pytest.approx(34.0) and p["Rf"] == pytest.approx(1.1 * 15 ** -0.15)
+    g = G()
+    g.Sand = PMat("Sand", SoilModel=Enum(2), phi=34.0, cref=1.0, DrainageType=V("Undrained (B)"))
+    out = solver(g)._soil_model(g, "Sand", 13, mu=15.0)
+    assert g.Sand.props["SoilModel"] == 14 and g.Sand.props["N1_60"] == 15.0  # PLAXIS' own number, not 13
+    assert g.Sand.props["K_G_e"] == pytest.approx(kge) and g.Sand.DrainageType == "Undrained (A)"
+    assert "UBC3D-PLM from (N1)60 15" in out
+
+    class NoUbc(Enum):
+        enum_dict = {"Mohr-Coulomb": 2}
+    g.Sand = PMat("Sand", SoilModel=NoUbc(2), phi=34.0)
+    with pytest.raises(SolverError, match="does not list the UBC3D-PLM"):
+        solver(g)._soil_model(g, "Sand", 13, mu=15.0)
+
+
+def test_ngi_adp_and_ubc3d_are_offered_by_soil_type():
+    m = plaxis_model.demo("2d")
+    m["materials"] = [{"name": "SoftClay", "kind": "soil", "model": "2", "drainage": "Undrained (C)",
+                       "props": {"cref": 25.0, "phi": 0.0, "ERef": 5000.0}},
+                      {"name": "Sand", "kind": "soil", "model": "2", "drainage": "Drained",
+                       "props": {"cref": 1.0, "phi": 33.0, "ERef": 30000.0}}]
+    c = {x["key"]: x for x in plaxis_model.candidates(m)}
+    assert plaxis_model.NGI_ADP in c["smodel:SoftClay"]["values"] and plaxis_model.NGI_ADP not in c["smodel:Sand"]["values"]
+    assert c["ubc:Sand"]["plaxis_ref"] == "Sand.UBCN160" and "ubc:SoftClay" not in c

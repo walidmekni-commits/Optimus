@@ -65,6 +65,107 @@ def hoek_brown_mc(sci: float, gsi: float, mi: float, d: float = 0.0, s3max: floa
     return c, phi, f"Hoek-Brown σci {sci:g}, GSI {gsi:g}, mi {mi:g}, D {d:g}, σ3max {s3max:g}: mb {mb:.4g}, s {s_:.4g}, a {a:.4g}"
 
 
+def ubc3d_params(n160: float, phi_p: float, c: float = 0.0) -> tuple[dict, str]:
+    """V26.1.9 (P2): the UBC3D-PLM parameters of a sand from its (N1)60 (generic calibration of Beaty & Byrne 2011,
+    revised by Makra 2013, as in the PLAXIS Material Models manual §15.5): K_G^e = 21.7 × 20 × (N1)60^0.3333,
+    K_B^e = 0.7 K_G^e, K_G^p = K_G^e (N1)60² × 0.003 + 100, φp = φcv + (N1)60 / 10, Rf = 1.1 (N1)60^-0.15;
+    me = ne = 0.5, np = 0.4, fdens = fEpost = 1. φp is the material's φ'."""
+    n = max(float(n160), 1.0)
+    kge = 21.7 * 20 * n ** 0.3333
+    kgp = kge * n ** 2 * 0.003 + 100
+    phi_cv = max(phi_p - n / 10, 20.0)
+    rf = min(1.1 * n ** -0.15, 0.99)
+    pars = {"KGe": kge, "KBe": 0.7 * kge, "KGp": kgp, "me": 0.5, "ne": 0.5, "np": 0.4, "pref": 100.0,
+            "phicv": phi_cv, "phip": phi_cv + n / 10, "c": max(c, 0.0), "sigmat": 0.0, "N160": n, "fdens": 1.0,
+            "fEpost": 1.0, "Rf": rf}
+    return pars, (f"UBC3D-PLM from (N1)60 {n:g}: K_G^e {kge:.4g}, K_B^e {0.7 * kge:.4g}, K_G^p {kgp:.4g}, "
+                  f"φcv {phi_cv:.3g}°, φp {phi_cv + n / 10:.3g}°, Rf {rf:.3g}")
+
+
+def ngi_adp_params(su: float, e: float | None, nu: float | None, zref: float | None, su_inc: float | None) -> tuple[dict, str]:
+    """V26.1.9 (P2): the NGI-ADP parameters of a clay from its undrained shear strength (PLAXIS Material Models
+    manual §9.2): su,ref^A = su, Gur/su^A = G / su (G from E, ν; 500 without E), γf^C = γf^E = γf^DSS = 5 %
+    (the manual's value for capacity analyses), su^C,TX/su^A = 0.99, su^P/su^A = 0.4, τ0/su^A = 0.7,
+    su^DSS/su^A = (1 + su^P/su^A) / 2 = 0.7, νu = 0.495."""
+    g_su = 500.0
+    if e and su > 0:
+        g_su = min(max(e / (2 * (1 + (nu if nu is not None else 0.3))) / su, 100.0), 2000.0)
+    pars = {"GurSuA": g_su, "GammaFC": 5.0, "GammaFE": 5.0, "GammaFDSS": 5.0, "SuARef": su, "SuCTXSuA": 0.99,
+            "SuPSuA": 0.4, "Tau0SuA": 0.7, "SuDSSSuA": 0.7, "NuU": 0.495}
+    if zref is not None:
+        pars["zref"] = zref
+    if su_inc is not None:
+        pars["SuAInc"] = su_inc
+    return pars, f"NGI-ADP from su {su:g}: Gur/su^A {g_su:.4g}, γf 5 %, su^P/su^A 0.4, su^DSS/su^A 0.7, τ0/su^A 0.7"
+
+
+# PLAXIS SoilModel codes and the names PLAXIS gives them (letters only, lower case). The code is read from PLAXIS'
+# own list when it gives one (QA V26.1.9: PLAXIS 3D 2024.3 stores enumerations as numbers).
+MODEL_NAMES = {2: ("mohrcoulomb",), 3: ("hardeningsoil",), 4: ("hssmall", "hardeningsoilsmall", "hardeningsoilsmallstrain"),
+               5: ("softsoil",), 6: ("softsoilcreep",), 8: ("modifiedcamclay",), 9: ("ngiadp",), 10: ("hoekbrown",),
+               13: ("ubc3dplm", "ubc3d", "ubcsand")}
+UBC_CODE = 13  # only from PLAXIS' own list: no number is assumed for UBC3D-PLM
+# the PLAXIS names a parameter may have, then a pattern on the property names of the material (letters and digits,
+# lower case), for the models whose parameter names differ between PLAXIS versions
+PARAM_NAMES = {
+    "GurSuA": (("GurSuA", "Gur_SuA", "GurDivSuA"), r"gur.*su.*"), "GammaFC": (("GammaFC", "gammafC", "GammaCF"), r"gammaf?c(tx)?"),
+    "GammaFE": (("GammaFE", "gammafE", "GammaEF"), r"gammaf?e"), "GammaFDSS": (("GammaFDSS", "gammafDSS"), r"gammaf?dss"),
+    "SuARef": (("SuARef", "SuRefA", "suAref", "SuA"), r"su(a)?ref(a)?|sua"), "SuCTXSuA": (("SuCTXSuA",), r"suc,?tx.*sua.*"),
+    "SuPSuA": (("SuPSuA",), r"sup.*sua.*"), "Tau0SuA": (("Tau0SuA",), r"tau0.*sua.*"), "SuDSSSuA": (("SuDSSSuA",), r"sudss.*sua.*"),
+    "NuU": (("NuU", "nuU", "nu_u"), r"nuu"), "zref": (("zref", "ZRef", "yref", "YRef"), r"[yz]ref"),
+    "SuAInc": (("SuAInc", "SuIncA", "suAinc"), r"su(a)?inc(a)?"),
+    "KGe": (("KGe", "KeG", "KG_e"), r"kge|keg"), "KBe": (("KBe", "KeB", "KB_e"), r"kbe|keb"), "KGp": (("KGp", "KpG", "KG_p"), r"kgp|kpg"),
+    "me": (("me", "ME"), r"me"), "ne": (("ne", "NE"), r"ne"), "np": (("np", "NP"), r"np"), "pref": (("pRef", "pref", "PRef"), r"pref"),
+    "phicv": (("phicv", "PhiCV", "phi_cv"), r"phicv"), "phip": (("phip", "PhiP", "phi_p", "PhiPeak"), r"phip(eak)?"),
+    "c": (("cRef", "cref", "c"), r"cref|c"), "sigmat": (("TensileStrength", "sigmat", "Sigmat"), r"tensilestrength|sigmat"),
+    "N160": (("N160", "N1_60", "N160Value"), r"n160.*"), "fdens": (("fdens", "Fdens"), r"fdens"),
+    "fEpost": (("fEpost", "FEpost", "fepost"), r"fepost"), "Rf": (("Rf", "RF"), r"rf"),
+}
+
+
+def _norm(name: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", str(name).lower())
+
+
+def model_code(mat, code: int) -> int:
+    """The SoilModel number of this PLAXIS for model 'code' (from PLAXIS' own list of models when it gives one)."""
+    try:
+        enum = dict(getattr(mat, "SoilModel").enum_dict)
+    except Exception:  # noqa: BLE001
+        enum = {}
+    want = MODEL_NAMES.get(int(code), ())
+    for name, val in enum.items():
+        n = _norm(name)
+        if n in want or (int(code) == UBC_CODE and any(n.startswith(w) for w in want)):
+            try:
+                return int(val)
+            except (TypeError, ValueError):
+                break
+    if int(code) == UBC_CODE:
+        raise SolverError("this PLAXIS does not list the UBC3D-PLM model (it needs the PLAXIS Ultimate licence)"
+                          + (f"; its models: {', '.join(enum)}" if enum else ""))
+    return int(code)
+
+
+def set_param(mat, key: str, val: float) -> str | None:
+    """Sets a model parameter under the first name this PLAXIS takes: the known names, then the material's property
+    names that match the pattern. Returns the name used, or None."""
+    names, pattern = PARAM_NAMES.get(key, ((key,), None))
+    tried = list(names)
+    if pattern:
+        try:
+            tried += [a for a in dir(mat) if not a.startswith("_") and re.fullmatch(pattern, _norm(a)) and a not in tried]
+        except Exception:  # noqa: BLE001
+            pass
+    for nm in tried:
+        try:
+            mat.setproperties(nm, float(val))
+            return nm
+        except Exception:  # noqa: BLE001
+            continue
+    return None
+
+
 # ---------------------------------------------------------------------------
 class SimulatedSolver:
     """Smooth, deterministic fake results. Factor-of-safety-like results rise with each parameter's
@@ -732,6 +833,8 @@ class PlaxisSolver(P1Mixin, P2Mixin):
         first = lambda *names: next((x for x in (get(n) for n in names) if x is not None), None)
         sci, gsi = first("SigmaCi", "SigmaCI", "Sigmaci", "sigmaci"), first("GSI")
         sets, note = {}, ""
+        if code in (9, UBC_CODE):  # V26.1.9 (P2): NGI-ADP from su; UBC3D-PLM from (N1)60
+            return self._model_by_key(g_i, mat, name, code, get, first, mu)
         if code == 2 and sci and gsi is not None:
             # V26.1.9 (P2): Mohr-Coulomb equivalent to Hoek-Brown (Hoek, Carranza-Torres & Corkum 2002), σ3max = σci / 4
             c, phi, info = hoek_brown_mc(sci, gsi, first("mi", "Mi") or 10.0, first("D", "Disturbance") or 0.0)
@@ -765,10 +868,11 @@ class PlaxisSolver(P1Mixin, P2Mixin):
                 sets = {("lambda", "Lambda"): lam * (1 + e0), ("kappa", "Kappa"): kap * (1 + e0),
                         ("M", "MCC_M", "?"): 6 * sp / (3 - sp), ("nu", "Nu", "nuUR", "?"): min(max(nuur, 0.1), 0.35)}
         try:
-            mat.setproperties("SoilModel", int(code))
+            num = model_code(mat, code)
+            mat.setproperties("SoilModel", num)
         except Exception as e:  # noqa: BLE001
             raise SolverError(f"{name}: PLAXIS did not take soil model {code}: {e}")
-        done = [f"SoilModel={code}"]
+        done = [f"SoilModel={num}"]
         for names, val in sets.items():
             for nm in names:
                 try:
@@ -781,6 +885,50 @@ class PlaxisSolver(P1Mixin, P2Mixin):
                 if "?" not in names:
                     raise SolverError(f"{name}: none of {', '.join(names)} could be set for soil model {code}")
         return f"{name}: " + ", ".join(done) + note
+
+    def _model_by_key(self, g_i, mat, name: str, code: int, get, first, n160=None) -> str:
+        """V26.1.9 (P2): a soil material switched to NGI-ADP (from its su) or UBC3D-PLM (from (N1)60); the parameter
+        names are found among the material's own properties. Returns what was set."""
+        if code == 9:
+            su = first("SuARef", "cref", "cRef", "c", "Cref")
+            if not su or su <= 0:
+                raise SolverError(f"{name}: NGI-ADP needs the undrained shear strength su (c'ref of the material)")
+            pars, note = ngi_adp_params(su, first("ERef", "Eref", "E", "Eu", "EuRef"), first("nu", "Nu"),
+                                        first("VerticalRef", "zref", "ZRef", "yref", "YRef"),
+                                        first("cinc", "CInc", "cInc", "SuAInc"))
+            drainage = 3  # the only drainage type of NGI-ADP: Undrained (C)
+            need = ("GurSuA", "SuARef")
+        else:
+            phi = first("phi", "Phi") or 30.0
+            pars, note = ubc3d_params(n160 if n160 is not None else 15.0, phi, first("cRef", "cref", "c") or 0.0)
+            drainage = None  # Drained or Undrained (A) only: (B) / (C) become (A) below
+            need = ("KGe", "KBe", "KGp", "phip")
+        num = model_code(mat, code)
+        try:
+            mat.setproperties("SoilModel", num)
+        except Exception as e:  # noqa: BLE001
+            raise SolverError(f"{name}: PLAXIS did not take soil model {code}: {e}")
+        done = [f"SoilModel={num}"]
+        for key, val in pars.items():
+            used = set_param(mat, key, val)
+            if used:
+                done.append(f"{used}={float(val):.5g}")
+            elif key in need:
+                raise SolverError(f"{name}: the {key} parameter of soil model {code} could not be set in this PLAXIS")
+        if code == UBC_CODE:
+            try:
+                d = str(getattr(getattr(mat, "DrainageType", None), "value", getattr(mat, "DrainageType", ""))).lower()
+            except Exception:  # noqa: BLE001
+                d = ""
+            if re.search(r"undrained\s*\(?[bc]|^[23]$", d.strip()):
+                drainage = 1
+        if drainage is not None:
+            try:
+                self._drainage(g_i, name, drainage)
+                done.append("DrainageType=" + ("Undrained (C)" if drainage == 3 else "Undrained (A)"))
+            except SolverError as e:
+                done.append(f"drainage type kept ({e})")
+        return f"{name}: " + ", ".join(done) + f" ({note})"
 
     LONGTERM_ID = "Long term"
 
@@ -941,7 +1089,7 @@ class PlaxisSolver(P1Mixin, P2Mixin):
         collapse_days = None
         p2 = new_p2()  # V26.1.9 (batch 2): slopes, staged fill / excavation, mesh refinement, phase settings
         is3 = path.suffix.lower() in (".p3d", ".p3dxml")
-        first = lambda v: 0 if any(r.strip().lower().endswith((".soilmodel", ".sscmu", ".stiffnessfactor")) for r in (v.plaxis_ref or "").split(";")) else 1
+        first = lambda v: 0 if any(r.strip().lower().endswith((".soilmodel", ".sscmu", ".ubcn160", ".stiffnessfactor")) for r in (v.plaxis_ref or "").split(";")) else 1
         for v in sorted(variables, key=first):  # a soil model is switched before the other parameters of the run
             if v.name not in inputs:
                 continue
@@ -968,6 +1116,9 @@ class PlaxisSolver(P1Mixin, P2Mixin):
                     continue
                 if prop.lower() == "soilmodel":  # V26.1.8: the material's constitutive model
                     soil_models.append(self._soil_model(g_i, obj_name, int(round(value))))
+                    continue
+                if prop.lower() == "ubcn160":  # V26.1.9 (P2): UBC3D-PLM (liquefaction) with this (N1)60
+                    soil_models.append(self._soil_model(g_i, obj_name, UBC_CODE, mu=float(value)))
                     continue
                 if prop.lower() == "sscmu":  # V26.1.8: Soft Soil Creep with this creep index μ*
                     soil_models.append(self._soil_model(g_i, obj_name, 6, mu=float(value)))

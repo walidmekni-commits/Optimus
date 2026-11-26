@@ -811,7 +811,7 @@ def x_of(plan: dict, r: dict):
     v = plan["variables"][0]
     val = (r.get("inputs") or {}).get(v["name"])
     if val is None:
-        if str(v.get("item") or "").startswith(("sscmu:", "smodel:")):
+        if str(v.get("item") or "").startswith(("sscmu:", "smodel:", "ubc:")):
             return None  # Run 0 keeps the material's own model: it is not a point of the SSC μ* curve
         cur = v.get("current")
         return _f(cur) if v["kind"] != "values" else None
