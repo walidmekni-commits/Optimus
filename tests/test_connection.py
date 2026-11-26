@@ -669,3 +669,58 @@ def test_owner_drawn_expert_menu_found_by_place(monkeypatch):
     G.LOG.clear()
     assert G.open_dialog(1, Main()) == "DLG" and st["soil"] == 1
     assert any("item 7 (id 321, NOT enabled)" in x for x in G.LOG) and any("item 7 (id 321, enabled)" in x for x in G.LOG)
+
+
+def test_a_late_dialog_is_used_and_a_failed_one_is_closed(monkeypatch):
+    """C1b re-test: in Staged construction the dialog came after OPTIMUS gave up and stayed open for Walid. A late
+    dialog is now used; when the work in it fails, OPTIMUS closes it (Close only, the server is not stopped)."""
+    from app import plaxis_gui as G
+
+    class Main:
+        handle = 3
+
+        def menu(self):
+            return None
+
+        def set_focus(self):
+            pass
+    n = {"polls": 0}
+
+    def dialog(pid):
+        n["polls"] += 1
+        return "DLG" if n["polls"] > 30 else None  # comes late
+    monkeypatch.setattr(G.time, "sleep", lambda s: None)
+    monkeypatch.setattr(G, "_dialog", dialog)
+    monkeypatch.setattr(G, "_keys", lambda k: None)
+    monkeypatch.setattr(G, "_open_expert", lambda pid, main: False)
+    assert G.open_dialog(1, Main()) == "DLG"
+
+    closed = []
+
+    class Btn:
+        def __init__(self, t):
+            self.t = t
+
+        def window_text(self):
+            return self.t
+
+        def is_visible(self):
+            return True
+
+        def click(self):
+            closed.append(self.t)
+
+    class Dlg:
+        def descendants(self):
+            return [Btn("Stop server"), Btn("Close")]
+
+        def window_text(self):
+            return "Configure remote scripting server"
+    monkeypatch.setattr(G, "_dialog", lambda pid: Dlg())
+    monkeypatch.setattr(G, "main_window", lambda pid: Main())
+    monkeypatch.setattr(G, "input_process", lambda pid: pid)
+    monkeypatch.setattr(G, "dismiss_disclaimer", lambda pid: False)
+    monkeypatch.setattr(G, "_in_dialog", lambda pid, dlg, want: (_ for _ in ()).throw(RuntimeError("fields not recognised")))
+    with pytest.raises(RuntimeError):
+        G.start_server(1)
+    assert closed == ["Close"]

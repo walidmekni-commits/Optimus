@@ -431,14 +431,36 @@ def open_dialog(pid: int, main) -> object:
             else:
                 log(f"keys: Down x{KEY_DOWNS}, Enter")
                 _keys("{DOWN}" * KEY_DOWNS + "{ENTER}")
-            d = _wait_dialog(pid, 5)
+            d = _wait_dialog(pid, 12)  # C1b re-test: in Staged construction the dialog came after more than 5 s
             if d:
                 return d
             _keys("{ESC}{ESC}")
             errors.append(f"{way}: no dialog after pressing the item")
         except Exception as e:  # noqa: BLE001
             errors.append(f"{way}: {type(e).__name__}: {e}")
+    d = _wait_dialog(pid, 10)  # a dialog that comes late is still used (never left open for the engineer)
+    if d:
+        log("the dialog came late: used")
+        return d
     raise RuntimeError("could not open Expert > Configure remote scripting server (" + "; ".join(errors) + ")")
+
+
+def close_dialog(pid: int) -> None:
+    """Closes the Configure remote scripting server dialog when OPTIMUS opened it and could not finish (Walid: no
+    dialog is left open for him). Close only: the server is never stopped here."""
+    d = _dialog(pid)
+    if d is None:
+        return
+    b = _button(d, r"(?i)^close$")
+    try:
+        if b is not None:
+            b.click()
+        else:
+            d.set_focus()
+            _keys("{ESC}")
+        log("dialog closed")
+    except Exception as e:  # noqa: BLE001
+        log(f"closing the dialog: {type(e).__name__}: {e}")
 
 
 def menu_report(pid: int) -> dict:
@@ -504,8 +526,16 @@ def start_server(pid: int, want_port: int | None = None) -> dict:
         main.set_focus()
     except Exception:  # noqa: BLE001
         pass
-    dlg = open_dialog(pid, main)
-    log("dialog open: " + _text(dlg))
+    try:
+        dlg = open_dialog(pid, main)
+        log("dialog open: " + _text(dlg))
+        return _in_dialog(pid, dlg, want_port)
+    except Exception:
+        close_dialog(pid)
+        raise
+
+
+def _in_dialog(pid: int, dlg, want_port: int | None) -> dict:
     show = _button(dlg, r"(?i)^show password$")
     if show is not None:
         try:

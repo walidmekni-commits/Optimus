@@ -391,7 +391,7 @@ def gui_start_server(pid: int, progress=lambda m: None, want_port: int = 0) -> d
     """In the PLAXIS Input window of process pid: close the disclaimer, Expert › Configure remote scripting server,
     read port and password, Start server, Close. {"ok", "port", "password"} or {"ok": False, "error"}."""
     progress("Switching on PLAXIS' scripting server for you (Expert › Configure remote scripting server)…")
-    r = gui("start", pid, want_port)
+    r = gui("start", pid, want_port, timeout=180)  # the menu routes wait for a slow dialog
     _step(("server switched on in PLAXIS: " if r.get("ok") else "menu switch not possible: ")
           + ("" if r.get("ok") else str(r.get("error")) + " | ") + ", ".join(r.get("log") or []))
     return r
