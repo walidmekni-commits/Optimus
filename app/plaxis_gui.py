@@ -246,23 +246,27 @@ def _via_win32(main, errors: list, opened: bool = False) -> bool:
         # C1b re-test: PLAXIS draws its menu items itself ('!! non-supported owner drawn item !!'): the item is found
         # by its place, the first item without a submenu after the submenus (Macro library, Run Python script, Run
         # Python tool, Python), whatever mode PLAXIS is in and however many items come before
-        item, downs = _by_place(subs)
-        if item is None:
-            _keys("{ESC}{ESC}")
-            errors.append("win32: no remote scripting item under Expert")
-            return False
+        item, downs, k = _by_place(subs)
         global KEY_DOWNS
         KEY_DOWNS = downs
-        enabled = _enabled(item)
-        log(f"win32: items not readable; the item after the submenus is item {downs} "
-            f"(id {_safe(item.item_id)}, {'enabled' if enabled else 'NOT enabled'})")
+        enabled = _enabled(item) if item is not None else True
+        log(f"win32: items not readable; the item after the submenus is item {downs} (index {k}, id "
+            f"{_call(item, 'item_id') if item is not None else '?'}, {'enabled' if enabled else 'NOT enabled'})")
+        _keys("{ESC}{ESC}")
         if not enabled:
-            _keys("{ESC}{ESC}")
             errors.append("win32: the Configure remote scripting server item is not enabled in this PLAXIS mode")
             return False
-        _keys("{ESC}{ESC}")
         time.sleep(0.3)
-        item.select()  # its command sent to PLAXIS
+        # C1b re-test (Ashraf, PLAXIS 3D 2024.3 in Staged construction): menu_select('#6->#6') opened the dialog
+        i = next(n for n, t in enumerate(tops) if t is exp)
+        log(f"win32: menu_select #{i}->#{k}")
+        try:
+            main.menu_select(f"#{i}->#{k}")
+        except Exception as e:  # noqa: BLE001
+            log(f"menu_select: {type(e).__name__}: {e}; sending its command")
+            if item is None:
+                raise
+            item.select()
         return True
     log("win32: clicking " + _text(item))
     try:
@@ -277,6 +281,14 @@ def _via_win32(main, errors: list, opened: bool = False) -> bool:
 KEY_DOWNS = ITEMS_ABOVE + 1  # Down presses to the item; set from the menu's shape when it can be read
 
 
+def _call(o, name, d=None):
+    """o.name() or d (C1b re-test: pywinauto's win32 MenuItem has no .type(): every call is guarded)."""
+    try:
+        return getattr(o, name)()
+    except Exception:  # noqa: BLE001
+        return d
+
+
 def _safe(f, d=None):
     try:
         return f()
@@ -285,31 +297,35 @@ def _safe(f, d=None):
 
 
 def _enabled(it) -> bool:
-    return bool(_safe(it.is_enabled, True))
+    return bool(_call(it, "is_enabled", True))
 
 
 def _is_sep(it) -> bool:
-    return bool((_safe(it.type, 0) or 0) & 0x800)  # MFT_SEPARATOR
+    info = _call(it, "_read_item")  # pywinauto: the MENUITEMINFO of the item
+    ftype = getattr(info, "fType", None)
+    if ftype is None:
+        ftype = _call(it, "type", 0) or 0
+    return bool(ftype & 0x800)  # MFT_SEPARATOR
 
 
 def _has_sub(it) -> bool:
-    sm = _safe(it.sub_menu)
-    return sm is not None and bool(_safe(sm.item_count, 1))
+    sm = _call(it, "sub_menu")
+    return sm is not None and bool(_call(sm, "item_count", 1))
 
 
 def _by_place(subs):
     """The first item without a submenu that follows a run of submenu items; with the Down presses to reach it
-    (separators are skipped by the keyboard)."""
+    (separators are skipped by the keyboard) and its index in the menu (for menu_select '#i->#k')."""
     seen_sub, n = False, 0
-    for it in subs:
+    for k, it in enumerate(subs):
         if _is_sep(it):
             continue
         n += 1
         if _has_sub(it):
             seen_sub = True
         elif seen_sub:
-            return it, n
-    return None, ITEMS_ABOVE + 1
+            return it, n, k
+    return None, ITEMS_ABOVE + 1, ITEMS_ABOVE
 
 
 def _to_soil_mode(pid: int, main) -> bool:
@@ -485,8 +501,8 @@ def menu_report(pid: int) -> dict:
             exp = next((t for t in m.items() if re.search(EXPERT, _text(t))), None)
             subs = exp.sub_menu().items() if exp is not None else []
             out["win32_expert"] = [{"text": _text(it), "separator": _is_sep(it), "submenu": _has_sub(it),
-                                    "enabled": _enabled(it), "id": _safe(it.item_id)} for it in subs]
-            out["item_by_place"] = _by_place(subs)[1]
+                                    "enabled": _enabled(it), "id": _call(it, "item_id")} for it in subs]
+            out["item_by_place"] = {"downs": _by_place(subs)[1], "index": _by_place(subs)[2]}
         except Exception as e:  # noqa: BLE001
             out["win32_expert"] = f"{type(e).__name__}: {e}"
         _keys("{ESC}{ESC}")
@@ -535,72 +551,81 @@ def start_server(pid: int, want_port: int | None = None) -> dict:
         raise
 
 
+def _running(dlg):
+    """True / False when the dialog tells whether the server runs (its label, else its buttons: Stop server enabled
+    and Start server greyed), None when it does not say."""
+    lab = _button(dlg, r"(?i)server is (not )?running")
+    if lab is not None:
+        return not re.search(r"(?i)not running", _text(lab))
+    stop, start = _button(dlg, r"(?i)^stop server$"), _button(dlg, r"(?i)^start server$")
+    if stop is not None and start is not None:
+        return _enabled(stop) and not _enabled(start)
+    return None
+
+
+def _click(w, what: str) -> bool:
+    """Clicks a control when it is enabled (C1b re-test: a greyed control raised ElementNotEnabled)."""
+    if w is None or not _enabled(w):
+        log(f"{what}: not available")
+        return False
+    w.click()
+    return True
+
+
 def _in_dialog(pid: int, dlg, want_port: int | None) -> dict:
+    """Reads the port and password of Configure remote scripting server; starts the server only when it is off.
+    A server already on is left as it is (C1b re-test: its password field gives the password: never stopped)."""
+    running = _running(dlg)
     show = _button(dlg, r"(?i)^show password$")
     if show is not None:
-        try:
-            checked = show.get_check_state() if hasattr(show, "get_check_state") else 0
-        except Exception:  # noqa: BLE001
-            checked = 0
-        if not checked:
-            show.click()
+        checked = _call(show, "get_check_state", 0) or 0
+        if not checked and _click(show, "Show password"):
             time.sleep(0.3)
     edits = _edits(dlg)
     texts = [_text(e) for e in edits]
-    log(f"fields: {len(edits)}")
+    log(f"fields: {len(edits)}; server {'on' if running else 'off' if running is False else 'state not shown'}")
     port_i = next((i for i, t in enumerate(texts) if t.isdigit()), None)
-    pw_i = next((i for i, t in enumerate(texts) if i != port_i and (t or True)), None)
+    pw_i = next((i for i, t in enumerate(texts) if i != port_i), None)
     if port_i is None or pw_i is None:
         raise RuntimeError(f"the port and password fields were not recognised ({len(edits)} fields)")
     port = int(texts[port_i])
-    if want_port and want_port != port:
-        edits[port_i].set_edit_text(str(want_port))
-        port = want_port
     password = texts[pw_i]
-    if not password or "•" in password or "*" * len(password) == password:
-        stop = _button(dlg, r"(?i)^stop server$")
-        if _button(dlg, r"(?i)server is running") is not None and stop is not None:
-            # the server is on with a password that cannot be read: stop it, so a new one can be set and started
-            stop.click()
-            log("server on with an unreadable password: pressed Stop server")
-            time.sleep(1.0)
-            edits = _edits(dlg)
-        password = strong_password()
-        edits[pw_i].set_edit_text(password)
-        log("no readable password: typed a new strong one")
+    readable = bool(password) and "•" not in password and "*" * len(password) != password
+    if running and not readable and _click(_button(dlg, r"(?i)^stop server$"), "Stop server"):
+        # last resort, only when the password of a running server cannot be read: restarted with a new one
+        log("server on with an unreadable password: pressed Stop server")
+        time.sleep(1.0)
+        edits, running = _edits(dlg), False
+    if running:
+        if not readable:
+            raise RuntimeError("the server is on but its password cannot be read in the dialog")
+        log("server already on: password read from PLAXIS")
     else:
-        log("password read from PLAXIS")
-    running = _button(dlg, r"(?i)server is running")
-    if running is None:
-        start = _button(dlg, r"(?i)^start server$")
-        if start is None:
-            raise RuntimeError("the Start server button was not found")
-        start.click()
+        if want_port and want_port != port and _enabled(edits[port_i]):
+            edits[port_i].set_edit_text(str(want_port))
+            port = want_port
+        if readable:
+            log("password read from PLAXIS")
+        else:
+            password = strong_password()
+            edits[pw_i].set_edit_text(password)
+            log("no readable password: typed a new strong one")
+        if not _click(_button(dlg, r"(?i)^start server$"), "Start server"):
+            raise RuntimeError("the Start server button was not found or is greyed")
         log("pressed Start server")
         time.sleep(1.5)
-    else:
-        log("server was already running")
-    state = _button(dlg, r"(?i)server is (not )?running")
-    if state is not None and re.search(r"(?i)not running", _text(state)):
-        find = _button(dlg, r"(?i)^find available$")  # the port is taken by another program
-        if find is not None:
-            find.click()
-            time.sleep(0.5)
-            t = _text(_edits(dlg)[port_i])
-            if t.isdigit():
-                port = int(t)
-            log(f"port taken: PLAXIS found port {port}")
-            start = _button(dlg, r"(?i)^start server$")
-            if start is not None:
-                start.click()
+        if _running(dlg) is False:
+            if _click(_button(dlg, r"(?i)^find available$"), "Find available"):  # the port is taken
+                time.sleep(0.5)
+                t = _text(_edits(dlg)[port_i])
+                if t.isdigit():
+                    port = int(t)
+                log(f"port taken: PLAXIS found port {port}")
+                _click(_button(dlg, r"(?i)^start server$"), "Start server")
                 time.sleep(1.5)
-        state = _button(dlg, r"(?i)server is (not )?running")
-    log("state: " + (_text(state) if state is not None else "?"))
-    if state is not None and re.search(r"(?i)not running", _text(state)):
-        raise RuntimeError("PLAXIS says the server is not running after pressing Start server")
-    close = _button(dlg, r"(?i)^close$")
-    if close is not None:
-        close.click()
+            if _running(dlg) is False:
+                raise RuntimeError("PLAXIS says the server is not running after pressing Start server")
+    _click(_button(dlg, r"(?i)^close$"), "Close")
     return {"port": port, "password": password, "pid": pid}
 
 

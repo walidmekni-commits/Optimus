@@ -668,7 +668,8 @@ def test_owner_drawn_expert_menu_found_by_place(monkeypatch):
     assert G._by_place(items)[1] == 7  # separators skipped: Down x7
     G.LOG.clear()
     assert G.open_dialog(1, Main()) == "DLG" and st["soil"] == 1
-    assert any("item 7 (id 321, NOT enabled)" in x for x in G.LOG) and any("item 7 (id 321, enabled)" in x for x in G.LOG)
+    assert any("item 7 (index 7, id 321, NOT enabled)" in x for x in G.LOG)
+    assert any("item 7 (index 7, id 321, enabled)" in x for x in G.LOG)
 
 
 def test_a_late_dialog_is_used_and_a_failed_one_is_closed(monkeypatch):
@@ -724,3 +725,88 @@ def test_a_late_dialog_is_used_and_a_failed_one_is_closed(monkeypatch):
     with pytest.raises(RuntimeError):
         G.start_server(1)
     assert closed == ["Close"]
+
+
+def test_running_server_dialog_as_plaxis_3d_2024_shows_it(monkeypatch):
+    """C1b re-test (Ashraf, PLAXIS 3D 2024.3, Staged construction): menu_select('#6->#6') opens
+    TfrmAppServerConfiguration; the server runs (Stop enabled, Start greyed, no state label); the TEdit gives the
+    password; nothing is pressed but Close (a greyed button raised ElementNotEnabled before)."""
+    from app import plaxis_gui as G
+    clicks = []
+
+    class C:
+        def __init__(self, t, cls, enabled=True):
+            self.t, self.cls, self.en = t, cls, enabled
+
+        def window_text(self):
+            return self.t
+
+        def class_name(self):
+            return self.cls
+
+        def is_visible(self):
+            return True
+
+        def is_enabled(self):
+            return self.en
+
+        def click(self):
+            if not self.en:
+                raise RuntimeError("ElementNotEnabled")
+            clicks.append(self.t)
+
+        def set_edit_text(self, t):
+            raise RuntimeError("must not change a running server's fields")
+
+    class Dlg:
+        def window_text(self):
+            return "Configure remote scripting server"
+
+        def descendants(self):
+            return [C("xRmPezxT2T~+zP<2", "TEdit", False), C("10500", "TPlxValueEdit", False), C("Sto&p server", "TButton"),
+                    C("Sta&rt server", "TButton", False), C("&Reset to default", "TButton", False),
+                    C("&Find available", "TButton", False), C("&Close", "TButton")]
+    monkeypatch.setattr(G.time, "sleep", lambda s: None)
+    assert G._in_dialog(4316, Dlg(), None) == {"port": 10500, "password": "xRmPezxT2T~+zP<2", "pid": 4316}
+    assert clicks == ["&Close"]
+
+    OD = "!! non-supported owner drawn item !!"
+
+    class It:
+        def __init__(self, sub=False):
+            self.sub = sub
+
+        def text(self):
+            return OD
+
+        def sub_menu(self):
+            return type("S", (), {"item_count": lambda s: 2, "items": lambda s: []})() if self.sub else None
+
+        def is_enabled(self):
+            return True
+
+        def item_id(self):
+            return 9
+
+    subs = [It(), It(), It(True), It(True), It(True), It(True), It(), It(), It(), It(True)]
+    tops = [type("T", (), {"text": lambda s, t=t: t, "sub_menu": lambda s: type("E", (), {"items": lambda s: subs})(),
+                           "click_input": lambda s: None})() for t in
+            ("&File", "&Edit", "&View", "&Staged construction", "&Phases", "&Options", "&Expert", "&Help")]
+    sel = []
+    opened = {"d": False}
+
+    class Main:
+        handle = 1
+
+        def menu(self):
+            return type("M", (), {"item_count": lambda s: 8, "items": lambda s: tops})()
+
+        def set_focus(self):
+            pass
+
+        def menu_select(self, path):
+            sel.append(path)
+            opened["d"] = True
+    monkeypatch.setattr(G, "_dialog", lambda pid: "DLG" if opened["d"] else None)
+    monkeypatch.setattr(G, "_keys", lambda k: None)
+    assert G.open_dialog(4316, Main()) == "DLG" and sel == ["#6->#6"]
